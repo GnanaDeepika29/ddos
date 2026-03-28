@@ -55,6 +55,7 @@ class Metrics:
 
         # Detection metrics
         self.alerts_total = self._counter("alerts_total", "Total number of alerts generated")
+        self.alerts_published_total = self._counter("alerts_published_total", "Total number of alerts published")
         self.detection_latency = self._histogram("detection_latency_seconds", "Detection latency in seconds")
         self.detection_errors_total = self._counter("detection_errors_total", "Total detection errors")
 

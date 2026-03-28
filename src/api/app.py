@@ -37,9 +37,17 @@ class HealthResponse(BaseModel):
 class AlertResponse(BaseModel):
     id: str
     type: str
+    detector: Optional[str] = None
+    category: Optional[str] = None
     severity: int
     confidence: Optional[float] = None
     target: Optional[str] = None
+    target_ip: Optional[str] = None
+    source_ips: List[str] = Field(default_factory=list)
+    telemetry_source: Optional[str] = None
+    pipeline_stage: Optional[str] = None
+    platform: Optional[str] = None
+    schema_version: Optional[str] = None
     description: str
     timestamp: float
     details: Dict[str, Any]
@@ -159,6 +167,7 @@ async def list_alerts(
     offset: int = Query(0, ge=0),
     severity: Optional[int] = Query(None, ge=1, le=5),
     alert_type: Optional[str] = None,
+    detector: Optional[str] = None,
 ) -> AlertListResponse:
     """List alerts with pagination and filtering."""
     query = """
@@ -173,6 +182,9 @@ async def list_alerts(
     if alert_type is not None:
         query += " AND alert_type = $" + str(len(params) + 1)
         params.append(alert_type)
+    if detector is not None:
+        query += " AND details->>'detector' = $" + str(len(params) + 1)
+        params.append(detector)
 
     # Count total
     count_query = query.replace("SELECT id, alert_type, severity, confidence, target, details, created_at", "SELECT COUNT(*)")
@@ -189,9 +201,17 @@ async def list_alerts(
         alerts.append(AlertResponse(
             id=row["id"],
             type=row["alert_type"],
+            detector=details.get("detector"),
+            category=details.get("category"),
             severity=row["severity"],
             confidence=row["confidence"],
             target=row["target"],
+            target_ip=details.get("target_ip"),
+            source_ips=details.get("source_ips", []),
+            telemetry_source=details.get("telemetry_source"),
+            pipeline_stage=details.get("pipeline_stage"),
+            platform=details.get("platform"),
+            schema_version=details.get("schema_version"),
             description=details.get("description", f"{row['alert_type']} attack detected"),
             timestamp=row["created_at"].timestamp(),
             details=details,
@@ -213,9 +233,17 @@ async def get_alert(alert_id: str = Path(..., pattern=r"^[0-9a-fA-F-]{36}$")) ->
     return AlertResponse(
         id=row["id"],
         type=row["alert_type"],
+        detector=details.get("detector"),
+        category=details.get("category"),
         severity=row["severity"],
         confidence=row["confidence"],
         target=row["target"],
+        target_ip=details.get("target_ip"),
+        source_ips=details.get("source_ips", []),
+        telemetry_source=details.get("telemetry_source"),
+        pipeline_stage=details.get("pipeline_stage"),
+        platform=details.get("platform"),
+        schema_version=details.get("schema_version"),
         description=details.get("description", f"{row['alert_type']} attack detected"),
         timestamp=row["created_at"].timestamp(),
         details=details,

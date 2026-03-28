@@ -8,6 +8,7 @@ processed and forwarded to Kafka for further analysis.
 """
 
 import asyncio
+import ipaddress
 import os
 import signal
 import threading
@@ -62,6 +63,7 @@ class PacketCapture:
         filter: str = "",
         producer: Optional[TelemetryProducer] = None,
         max_queue_size: int = 10000,
+        output_topic: str = "telemetry.raw",
     ):
         """Initialize packet capture.
 
@@ -83,8 +85,10 @@ class PacketCapture:
         self.buffer_size = buffer_size
         self.timeout_ms = timeout_ms
         self.filter = filter
+        self._owns_producer = producer is None
         self.producer = producer or TelemetryProducer()
         self.max_queue_size = max_queue_size
+        self.output_topic = output_topic
 
         self._running = False
         self._capture_thread: Optional[threading.Thread] = None
@@ -181,8 +185,8 @@ class PacketCapture:
                 return
 
             proto = ip.p
-            src_ip = ip.src
-            dst_ip = ip.dst
+            src_ip = str(ipaddress.ip_address(ip.src))
+            dst_ip = str(ipaddress.ip_address(ip.dst))
             src_port = None
             dst_port = None
 
@@ -303,10 +307,9 @@ class PacketCapture:
                 # Send batch to Kafka
                 try:
                     await self.producer.send_batch(
-                        topic="telemetry.raw",
+                        topic=self.output_topic,
                         messages=batch,
                     )
-                    metrics.packets_total.inc(len(batch))
                 except Exception as e:
                     logger.error("Failed to send batch to Kafka", error=str(e))
                     # Put packets back? For now just drop.
@@ -354,7 +357,8 @@ class PacketCapture:
         if self._pfring:
             self._pfring.close()
 
-        await self.producer.close()
+        if self._owns_producer:
+            await self.producer.stop()
 
     def get_stats(self) -> Dict[str, Any]:
         """Get capture statistics."""

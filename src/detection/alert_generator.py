@@ -17,6 +17,7 @@ import structlog
 from ..common.logging import get_logger
 from ..common.metrics import metrics
 from ..common.kafka_consumer import KafkaConsumerHelper
+from ..common.kafka_producer import TelemetryProducer
 
 logger = get_logger(__name__)
 
@@ -32,6 +33,7 @@ class AlertGenerator:
         batch_size: int = 50,
         batch_timeout_ms: int = 500,
         enrichment_enabled: bool = True,
+        producer: Optional[TelemetryProducer] = None,
     ):
         """Initialize alert generator.
 
@@ -49,6 +51,7 @@ class AlertGenerator:
         self.batch_size = batch_size
         self.batch_timeout_ms = batch_timeout_ms
         self.enrichment_enabled = enrichment_enabled
+        self.producer = producer
 
         self._running = False
         self._consumer: Optional[KafkaConsumerHelper] = None
@@ -58,9 +61,43 @@ class AlertGenerator:
             "errors": 0,
         }
 
+    def _normalize_alert_contract(self, alert: Dict[str, Any]) -> Dict[str, Any]:
+        normalized = alert.copy()
+        flow = normalized.get("flow", {}) or {}
+        packet = normalized.get("packet", {}) or {}
+
+        target_ip = (
+            normalized.get("target_ip")
+            or flow.get("dst_ip")
+            or packet.get("dst_ip")
+            or "unknown"
+        )
+        source_ip = (
+            normalized.get("source_ip")
+            or flow.get("src_ip")
+            or packet.get("src_ip")
+            or None
+        )
+        source_ips = normalized.get("source_ips") or ([source_ip] if source_ip else [])
+
+        normalized.setdefault("detector", "unknown")
+        normalized.setdefault("target_ip", target_ip)
+        normalized.setdefault("target", target_ip if target_ip != "unknown" else normalized.get("target", "unknown"))
+        normalized.setdefault("source_ip", source_ip)
+        normalized["source_ips"] = [ip for ip in source_ips if ip]
+        normalized.setdefault("telemetry_source", "unified_pipeline")
+        normalized.setdefault("schema_version", "1.0")
+        normalized.setdefault(
+            "platform",
+            "Real-Time Distributed Denial of Service Attack Detection and Mitigation in Cloud Networks",
+        )
+        normalized.setdefault("pipeline_stage", "enriched_alert")
+        normalized.setdefault("confidence", round(min(0.99, 0.45 + 0.1 * normalized.get("severity", 2)), 3))
+        return normalized
+
     def _enrich_alert(self, alert: Dict[str, Any]) -> Dict[str, Any]:
         """Enrich alert with additional metadata."""
-        enriched = alert.copy()
+        enriched = self._normalize_alert_contract(alert)
 
         # Add unique alert ID if not present
         if "alert_id" not in enriched:
@@ -89,7 +126,11 @@ class AlertGenerator:
 
         # Add geo-ip enrichment (placeholder)
         if self.enrichment_enabled:
-            target_ip = enriched.get("target_ip") or enriched.get("target", {}).split(":")[0]
+            target = enriched.get("target", "unknown")
+            if isinstance(target, dict):
+                target_ip = target.get("ip") or target.get("target_ip") or "unknown"
+            else:
+                target_ip = enriched.get("target_ip") or str(target).split(":")[0]
             if target_ip and target_ip != "unknown":
                 # In production, call GeoIP service
                 enriched["geo"] = {
@@ -167,6 +208,8 @@ class AlertGenerator:
                     topic=self.output_topic,
                     messages=enriched_alerts,
                 )
+            for alert in enriched_alerts:
+                metrics.record_attack(alert.get("type", "unknown"), alert.get("severity", 2))
             self._stats["alerts_published"] += len(enriched_alerts)
             metrics.alerts_published_total.inc(len(enriched_alerts))
 
@@ -187,6 +230,7 @@ class AlertGenerator:
             group_id="alert-generator",
             batch_size=self.batch_size,
             batch_timeout_ms=self.batch_timeout_ms,
+            producer=self.producer,
         )
         await self._consumer.start()
 

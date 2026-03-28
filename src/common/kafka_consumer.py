@@ -5,6 +5,7 @@ batching capabilities for efficient message processing.
 """
 
 import asyncio
+import contextlib
 import time
 from typing import Optional, List, Dict, Any, AsyncIterator, Callable
 from collections import deque
@@ -14,12 +15,14 @@ import structlog
 try:
     from kafka import KafkaConsumer as SyncKafkaConsumer
     from kafka import KafkaProducer as SyncKafkaProducer
-    from kafka.errors import KafkaError
+    from kafka.errors import KafkaError, NoBrokersAvailable
     KAFKA_AVAILABLE = True
 except ImportError:
     KAFKA_AVAILABLE = False
     SyncKafkaConsumer = None
     SyncKafkaProducer = None
+    KafkaError = Exception
+    NoBrokersAvailable = Exception
 
 from .logging import get_logger
 from .metrics import metrics
@@ -45,6 +48,8 @@ class KafkaConsumerHelper:
         enable_auto_commit: bool = True,
         consumer_timeout_ms: int = 1000,
         producer: Optional["TelemetryProducer"] = None,
+        startup_retry_attempts: int = 15,
+        startup_retry_backoff_ms: int = 2000,
         **kwargs,
     ):
         """Initialize Kafka consumer helper.
@@ -59,6 +64,8 @@ class KafkaConsumerHelper:
             enable_auto_commit: Whether to auto-commit offsets.
             consumer_timeout_ms: Timeout for consumer.poll().
             producer: Optional producer for forwarding messages.
+            startup_retry_attempts: Number of startup attempts before failing.
+            startup_retry_backoff_ms: Delay between startup attempts.
             **kwargs: Additional arguments for KafkaConsumer.
         """
         if not KAFKA_AVAILABLE:
@@ -73,6 +80,8 @@ class KafkaConsumerHelper:
         self.enable_auto_commit = enable_auto_commit
         self.consumer_timeout_ms = consumer_timeout_ms
         self.producer = producer
+        self.startup_retry_attempts = startup_retry_attempts
+        self.startup_retry_backoff_ms = startup_retry_backoff_ms
 
         self._consumer: Optional[SyncKafkaConsumer] = None
         self._running = False
@@ -108,10 +117,60 @@ class KafkaConsumerHelper:
             logger.warning("Consumer already running")
             return
 
-        self._running = True
-        self._consumer = SyncKafkaConsumer(**self._consumer_config)
-        self._consumer.subscribe([self.topic])
-        logger.info("Kafka consumer started", topic=self.topic, group=self.group_id)
+        last_error: Optional[Exception] = None
+
+        for attempt in range(1, self.startup_retry_attempts + 1):
+            try:
+                self._consumer = SyncKafkaConsumer(**self._consumer_config)
+                self._consumer.subscribe([self.topic])
+                self._running = True
+                logger.info(
+                    "Kafka consumer started",
+                    topic=self.topic,
+                    group=self.group_id,
+                    attempt=attempt,
+                )
+                return
+            except (KafkaError, NoBrokersAvailable, OSError) as e:
+                last_error = e
+                logger.warning(
+                    "Kafka consumer startup attempt failed",
+                    topic=self.topic,
+                    group=self.group_id,
+                    attempt=attempt,
+                    error=str(e),
+                    servers=self.bootstrap_servers,
+                )
+                if self._consumer:
+                    with contextlib.suppress(Exception):
+                        self._consumer.close()
+                    self._consumer = None
+                if attempt < self.startup_retry_attempts:
+                    await asyncio.sleep(self.startup_retry_backoff_ms / 1000.0)
+            except Exception as e:
+                last_error = e
+                logger.error(
+                    "Unexpected Kafka consumer startup error",
+                    topic=self.topic,
+                    group=self.group_id,
+                    attempt=attempt,
+                    error=str(e),
+                )
+                if self._consumer:
+                    with contextlib.suppress(Exception):
+                        self._consumer.close()
+                    self._consumer = None
+                if attempt < self.startup_retry_attempts:
+                    await asyncio.sleep(self.startup_retry_backoff_ms / 1000.0)
+
+        logger.error(
+            "Failed to initialize Kafka consumer",
+            topic=self.topic,
+            group=self.group_id,
+            servers=self.bootstrap_servers,
+            error=str(last_error),
+        )
+        raise last_error
 
     async def stop(self):
         """Stop the consumer."""
@@ -138,7 +197,10 @@ class KafkaConsumerHelper:
         while self._running:
             try:
                 # Poll for messages
-                messages = self._consumer.poll(timeout_ms=self.batch_timeout_ms)
+                messages = await asyncio.to_thread(
+                    self._consumer.poll,
+                    timeout_ms=self.batch_timeout_ms,
+                )
                 if not messages:
                     # If we have a partial batch and deadline passed, yield it
                     if batch and batch_deadline and time.time() >= batch_deadline:

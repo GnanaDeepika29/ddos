@@ -71,7 +71,8 @@ redis:
 # Monitoring
 monitoring:
   prometheus:
-    enabled: false  # Disable for dev
+    enabled: true
+    port: 9090
   opentelemetry:
     enabled: false
 

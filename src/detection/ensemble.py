@@ -16,6 +16,7 @@ import structlog
 from ..common.logging import get_logger
 from ..common.metrics import metrics
 from ..common.kafka_consumer import KafkaConsumerHelper
+from ..common.kafka_producer import TelemetryProducer
 
 logger = get_logger(__name__)
 
@@ -45,6 +46,7 @@ class EnsembleDetector:
         window_seconds: int = 10,
         min_votes: int = 2,
         voting: str = "weighted",  # weighted, majority, consensus
+        producer: Optional[TelemetryProducer] = None,
     ):
         """Initialize ensemble detector.
 
@@ -78,6 +80,7 @@ class EnsembleDetector:
         self.window_seconds = window_seconds
         self.min_votes = min_votes
         self.voting = voting
+        self.producer = producer
 
         self._running = False
         self._consumers: List[KafkaConsumerHelper] = []
@@ -120,14 +123,14 @@ class EnsembleDetector:
         confidence = attack_votes / len(results)
         return is_attack, confidence
 
-    def _correlate_alerts(self) -> List[Dict[str, Any]]:
+    async def _correlate_alerts(self) -> List[Dict[str, Any]]:
         """Correlate alerts within the time window and produce ensemble alerts."""
         now = time.time()
         window_start = now - self.window_seconds
 
         # Collect alerts within window
         alerts_in_window = []
-        with self._queue_lock:
+        async with self._queue_lock:
             while self._alerts_queue and self._alerts_queue[0].timestamp < window_start:
                 self._alerts_queue.popleft()
             alerts_in_window = list(self._alerts_queue)
@@ -162,14 +165,32 @@ class EnsembleDetector:
             if is_attack:
                 # Determine highest severity among detectors
                 max_severity = max((r.severity for r in results), default=1)
+                source_ips = sorted({
+                    ip
+                    for r in results
+                    for ip in (r.alert.get("source_ips") or ([r.alert.get("source_ip")] if r.alert.get("source_ip") else []))
+                    if ip
+                })
+                target_ip = next(
+                    (
+                        r.alert.get("target_ip")
+                        for r in results
+                        if r.alert.get("target_ip") and r.alert.get("target_ip") != "unknown"
+                    ),
+                    "unknown",
+                )
                 # Aggregate alert details
                 detectors_triggered = [r.detector_type for r in results]
                 combined_alert = {
+                    "detector": "ensemble",
                     "type": "ddos_attack",
                     "confidence": confidence,
                     "severity": max_severity,
                     "detectors": detectors_triggered,
+                    "source_ips": source_ips,
+                    "target_ip": target_ip,
                     "target": key,
+                    "telemetry_source": "correlated_detection",
                     "timestamp": now,
                     "details": {
                         "alerts": [r.alert for r in results],
@@ -188,7 +209,7 @@ class EnsembleDetector:
                 for msg in batch:
                     # Convert message to DetectorResult
                     result = DetectorResult(
-                        detector_type=detector_type,
+                        detector_type=msg.get("detector", detector_type),
                         alert=msg,
                         confidence=msg.get("confidence", msg.get("score", 0.5)),
                         timestamp=msg.get("timestamp", time.time()),
@@ -208,7 +229,7 @@ class EnsembleDetector:
         while self._running:
             await asyncio.sleep(self.window_seconds / 2)  # Run twice per window
             try:
-                ensemble_alerts = self._correlate_alerts()
+                ensemble_alerts = await self._correlate_alerts()
                 if ensemble_alerts:
                     # Send ensemble alerts to Kafka
                     if self._consumers and self._consumers[0].producer:
@@ -240,6 +261,7 @@ class EnsembleDetector:
                 group_id=f"ensemble-detector-{detector_type}",
                 batch_size=self.batch_size,
                 batch_timeout_ms=self.batch_timeout_ms,
+                producer=self.producer,
             )
             await consumer.start()
             self._consumers.append(consumer)

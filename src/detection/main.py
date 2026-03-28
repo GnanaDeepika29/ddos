@@ -11,11 +11,13 @@ import argparse
 from typing import Optional
 
 import structlog
+from prometheus_client import start_http_server
 
 from ..common.logging import get_logger, setup_logging
 from ..common.config import load_config
 from ..common.kafka_producer import TelemetryProducer
 from ..common.kafka_consumer import KafkaConsumerHelper
+from ..common.metrics import metrics
 from .signature import SignatureDetector
 from .anomaly import AnomalyDetector
 from .ensemble import EnsembleDetector
@@ -54,10 +56,15 @@ class DetectionService:
 
         # Initialize Kafka producer (shared for all detection outputs)
         kafka_config = self.config.get("kafka", {})
+        kafka_topics = kafka_config.get("topics", {})
+        raw_topic = kafka_topics.get("telemetry_raw", "telemetry.raw")
+        flows_topic = kafka_topics.get("flows", "telemetry.flows")
+        alerts_topic = kafka_topics.get("alerts", "alerts.enriched")
         self.producer = TelemetryProducer(
             bootstrap_servers=kafka_config.get("bootstrap_servers"),
             batch_size=kafka_config.get("producer_batch_size", 100),
             batch_timeout_ms=kafka_config.get("producer_linger_ms", 100),
+            send_timeout_ms=kafka_config.get("producer_send_timeout_ms", 10000),
             compression_type=kafka_config.get("compression_type", "gzip"),
         )
         await self.producer.start()
@@ -72,12 +79,13 @@ class DetectionService:
             self.signature_detector = SignatureDetector(
                 rules_path=sig_cfg.get("rules_path", "/etc/snort/rules/"),
                 engine=sig_cfg.get("engine", "snort"),
-                input_topic=sig_cfg.get("input_topic", "telemetry.raw"),
+                input_topic=sig_cfg.get("input_topic", raw_topic),
                 output_topic=sig_cfg.get("output_topic", "detection.signature.alerts"),
                 bootstrap_servers=kafka_config.get("bootstrap_servers"),
                 batch_size=sig_cfg.get("batch_size", 1000),
                 timeout_ms=sig_cfg.get("timeout_ms", 1000),
                 reload_interval=sig_cfg.get("reload_interval", 300),
+                producer=self.producer,
             )
             task = asyncio.create_task(self.signature_detector.start())
             self._tasks.append(task)
@@ -92,7 +100,7 @@ class DetectionService:
             icmp_flood = anomaly_cfg.get("icmp_flood", {})
 
             self.anomaly_detector = AnomalyDetector(
-                input_topic=anomaly_cfg.get("input_topic", "telemetry.flows"),
+                input_topic=anomaly_cfg.get("input_topic", flows_topic),
                 output_topic=anomaly_cfg.get("output_topic", "detection.anomaly.alerts"),
                 bootstrap_servers=kafka_config.get("bootstrap_servers"),
                 batch_size=anomaly_cfg.get("batch_size", 100),
@@ -105,6 +113,7 @@ class DetectionService:
                 window_seconds=anomaly_cfg.get("windows", {}).get("short", 60),
                 baseline_window_seconds=anomaly_cfg.get("windows", {}).get("long", 3600),
                 deviation_factor=anomaly_cfg.get("deviation_factor", 3.0),
+                producer=self.producer,
             )
             task = asyncio.create_task(self.anomaly_detector.start())
             self._tasks.append(task)
@@ -118,13 +127,14 @@ class DetectionService:
             self.ml_detector = MLDetector(
                 model_path=ml_cfg.get("model_path", "/opt/ddos-defense/models/ensemble_model.joblib"),
                 feature_extractor_path=ml_cfg.get("feature_extractor_path"),
-                input_topic=ml_cfg.get("input_topic", "telemetry.flows"),
+                input_topic=ml_cfg.get("input_topic", flows_topic),
                 output_topic=ml_cfg.get("output_topic", "detection.ml.alerts"),
                 bootstrap_servers=kafka_config.get("bootstrap_servers"),
                 batch_size=ml_cfg.get("batch_size", 100),
                 batch_timeout_ms=ml_cfg.get("batch_timeout_ms", 1000),
                 confidence_threshold=ml_cfg.get("confidence_threshold", 0.85),
                 inference_mode=ml_cfg.get("inference_mode", "batch"),
+                producer=self.producer,
             )
             task = asyncio.create_task(self.ml_detector.start())
             self._tasks.append(task)
@@ -148,6 +158,7 @@ class DetectionService:
                 window_seconds=ensemble_cfg.get("window_seconds", 10),
                 min_votes=ensemble_cfg.get("min_votes", 2),
                 voting=ensemble_cfg.get("voting", "weighted"),
+                producer=self.producer,
             )
             task = asyncio.create_task(self.ensemble_detector.start())
             self._tasks.append(task)
@@ -158,11 +169,12 @@ class DetectionService:
         if alert_cfg.get("enabled", True):
             self.alert_generator = AlertGenerator(
                 input_topic=alert_cfg.get("input_topic", "detection.ensemble.alerts"),
-                output_topic=alert_cfg.get("output_topic", "alerts.enriched"),
+                output_topic=alert_cfg.get("output_topic", alerts_topic),
                 bootstrap_servers=kafka_config.get("bootstrap_servers"),
                 batch_size=alert_cfg.get("batch_size", 50),
                 batch_timeout_ms=alert_cfg.get("batch_timeout_ms", 500),
                 enrichment_enabled=alert_cfg.get("enrichment_enabled", True),
+                producer=self.producer,
             )
             task = asyncio.create_task(self.alert_generator.start())
             self._tasks.append(task)
@@ -218,6 +230,11 @@ async def main():
 
     # Setup logging
     setup_logging(level=config.get("log_level", "INFO"))
+    prom_cfg = config.get("monitoring", {}).get("prometheus", {})
+    metrics_port = prom_cfg.get("port", 9090)
+    if prom_cfg.get("enabled", True):
+        start_http_server(metrics_port, registry=metrics._registry)
+    metrics.service_up.labels(service="detection").set(1)
 
     service = DetectionService(config)
 
@@ -242,6 +259,7 @@ async def main():
     except asyncio.CancelledError:
         pass
     finally:
+        metrics.service_up.labels(service="detection").set(0)
         logger.info("Detection service exiting")
 
 

@@ -49,6 +49,7 @@ class TelemetryGRPC:
         producer: Optional[TelemetryProducer] = None,
         subscribe_paths: Optional[List[str]] = None,
         sample_interval_ms: int = 1000,
+        output_topic: str = "telemetry.raw",
     ):
         """Initialize gNMI telemetry client.
 
@@ -72,7 +73,9 @@ class TelemetryGRPC:
         self.password = password
         self.tls = tls
         self.ca_cert = ca_cert
+        self._owns_producer = producer is None
         self.producer = producer or TelemetryProducer()
+        self.output_topic = output_topic
         self.subscribe_paths = subscribe_paths or [
             "/interfaces/interface/state/counters",
             "/components/component/state",
@@ -163,7 +166,7 @@ class TelemetryGRPC:
                 # Send to Kafka
                 asyncio.create_task(
                     self.producer.send(
-                        topic="telemetry.grpc",
+                        topic=self.output_topic,
                         message=telemetry_data,
                     )
                 )
@@ -281,7 +284,8 @@ class TelemetryGRPC:
         self._running = False
         if self._channel:
             self._channel.close()
-        await self.producer.close()
+        if self._owns_producer:
+            await self.producer.stop()
         logger.info("gNMI telemetry stopped")
 
     def get_stats(self) -> Dict[str, Any]:

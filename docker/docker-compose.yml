@@ -8,6 +8,12 @@ services:
       ZOOKEEPER_TICK_TIME: 2000
     ports:
       - "2181:2181"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/2181'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
     networks:
       - ddos-network
     restart: unless-stopped
@@ -16,7 +22,8 @@ services:
     image: confluentinc/cp-kafka:7.5.0
     container_name: ddos-kafka
     depends_on:
-      - zookeeper
+      zookeeper:
+        condition: service_healthy
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
@@ -29,6 +36,12 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
     ports:
       - "9092:9092"
+    healthcheck:
+      test: ["CMD-SHELL", "cub kafka-ready -b localhost:29092 1 30"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 30s
     networks:
       - ddos-network
     restart: unless-stopped
@@ -43,6 +56,12 @@ services:
       POSTGRES_PASSWORD: change_me
     ports:
       - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h localhost -U ddos_user -d ddos_platform"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
@@ -55,6 +74,12 @@ services:
     container_name: ddos-redis
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
     volumes:
       - redis_data:/data
     networks:
@@ -73,6 +98,12 @@ services:
     networks:
       - ddos-network
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:9090/-/ready || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
@@ -85,7 +116,8 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_SECURITY_ADMIN_USER=gnanadeepika2982004@gmail.com
+      - GF_SECURITY_ADMIN_PASSWORD=deepi2982004
       - GF_INSTALL_PLUGINS=grafana-piechart-panel
     volumes:
       - ../scripts/monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
@@ -95,7 +127,14 @@ services:
       - ddos-network
     restart: unless-stopped
     depends_on:
-      - prometheus
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3000/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
 
   # Kafka UI for monitoring
   kafka-ui:
@@ -111,7 +150,8 @@ services:
       - ddos-network
     restart: unless-stopped
     depends_on:
-      - kafka
+      kafka:
+        condition: service_healthy
 
   # Ingestion service
   ingestion:
@@ -130,9 +170,12 @@ services:
     networks:
       - ddos-network
     depends_on:
-      - kafka
-      - postgres
-      - redis
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     restart: unless-stopped
 
   # Detection service
@@ -152,9 +195,12 @@ services:
     networks:
       - ddos-network
     depends_on:
-      - kafka
-      - postgres
-      - redis
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     restart: unless-stopped
 
   # Mitigation service
@@ -174,9 +220,12 @@ services:
     networks:
       - ddos-network
     depends_on:
-      - kafka
-      - postgres
-      - redis
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     restart: unless-stopped
     privileged: true  # needed for iptables operations in dev; remove in prod
 
@@ -199,9 +248,12 @@ services:
     networks:
       - ddos-network
     depends_on:
-      - kafka
-      - postgres
-      - redis
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     restart: unless-stopped
 
 networks:

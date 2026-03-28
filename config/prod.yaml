@@ -43,7 +43,7 @@ kafka:
 detection:
   signature:
     enabled: true
-    rules_path: /etc/snort/rules/
+    rules_path: /app/config/detection/rules
     reload_interval: 3600
   anomaly:
     windows:

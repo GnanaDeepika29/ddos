@@ -1,126 +1,139 @@
 {
-  "dashboard": {
-    "title": "DDoS Defense Platform Overview",
-    "uid": "ddos-platform-overview",
-    "timezone": "browser",
-    "panels": [
-      {
-        "title": "Packets Ingested (rate)",
-        "type": "graph",
-        "gridPos": {"x": 0, "y": 0, "w": 8, "h": 8},
-        "targets": [
-          {
-            "expr": "rate(ddos_defense_packets_total[5m])",
-            "legendFormat": "Packets/sec",
-            "refId": "A"
-          }
-        ]
-      },
-      {
-        "title": "Alerts per second",
-        "type": "graph",
-        "gridPos": {"x": 8, "y": 0, "w": 8, "h": 8},
-        "targets": [
-          {
-            "expr": "rate(ddos_defense_alerts_total[5m])",
-            "legendFormat": "Alerts/sec",
-            "refId": "A"
-          }
-        ]
-      },
-      {
-        "title": "Mitigation Actions",
-        "type": "graph",
-        "gridPos": {"x": 16, "y": 0, "w": 8, "h": 8},
-        "targets": [
-          {
-            "expr": "rate(ddos_defense_mitigation_actions_total[5m])",
-            "legendFormat": "Actions/sec",
-            "refId": "A"
-          }
-        ]
-      },
-      {
-        "title": "Detection Latency",
-        "type": "graph",
-        "gridPos": {"x": 0, "y": 8, "w": 12, "h": 8},
-        "targets": [
-          {
-            "expr": "histogram_quantile(0.99, sum(rate(ddos_defense_detection_latency_seconds_bucket[5m])) by (le))",
-            "legendFormat": "p99",
-            "refId": "A"
-          },
-          {
-            "expr": "histogram_quantile(0.95, sum(rate(ddos_defense_detection_latency_seconds_bucket[5m])) by (le))",
-            "legendFormat": "p95",
-            "refId": "B"
-          },
-          {
-            "expr": "histogram_quantile(0.50, sum(rate(ddos_defense_detection_latency_seconds_bucket[5m])) by (le))",
-            "legendFormat": "p50",
-            "refId": "C"
-          }
-        ]
-      },
-      {
-        "title": "Attack Types Distribution",
-        "type": "piechart",
-        "gridPos": {"x": 12, "y": 8, "w": 12, "h": 8},
-        "targets": [
-          {
-            "expr": "sum(ddos_defense_attacks_detected) by (attack_type)",
-            "legendFormat": "{{attack_type}}",
-            "refId": "A"
-          }
-        ]
-      },
-      {
-        "title": "Service Health",
-        "type": "stat",
-        "gridPos": {"x": 0, "y": 16, "w": 6, "h": 4},
-        "targets": [
-          {
-            "expr": "ddos_defense_service_up{service=\"ingestion\"}",
-            "legendFormat": "Ingestion",
-            "refId": "A"
-          },
-          {
-            "expr": "ddos_defense_service_up{service=\"detection\"}",
-            "legendFormat": "Detection",
-            "refId": "B"
-          },
-          {
-            "expr": "ddos_defense_service_up{service=\"mitigation\"}",
-            "legendFormat": "Mitigation",
-            "refId": "C"
-          }
-        ],
-        "options": {
-          "reduceOptions": {
-            "values": false,
-            "calcs": ["last"]
-          },
-          "showThresholdLabels": false,
-          "showThresholdMarkers": true
+  "title": "DDoS Defense Platform Overview",
+  "uid": "ddos-platform-overview",
+  "timezone": "browser",
+  "panels": [
+    {
+      "title": "Packets Ingested (rate)",
+      "type": "graph",
+      "gridPos": {"x": 0, "y": 0, "w": 8, "h": 8},
+      "targets": [
+        {
+          "expr": "rate(ddos_defense_packets_total[5m])",
+          "legendFormat": "Packets/sec",
+          "refId": "A"
         }
-      },
-      {
-        "title": "Kafka Lag (consumer group)",
-        "type": "graph",
-        "gridPos": {"x": 6, "y": 16, "w": 18, "h": 8},
-        "targets": [
-          {
-            "expr": "kafka_consumer_lag{group=\"ddos-defense-platform\"}",
-            "legendFormat": "{{topic}}",
-            "refId": "A"
-          }
-        ]
+      ]
+    },
+    {
+      "title": "Alerts per second",
+      "type": "graph",
+      "gridPos": {"x": 8, "y": 0, "w": 8, "h": 8},
+      "targets": [
+        {
+          "expr": "rate(ddos_defense_alerts_total[5m])",
+          "legendFormat": "Alerts/sec",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Mitigation Actions",
+      "type": "graph",
+      "gridPos": {"x": 16, "y": 0, "w": 8, "h": 8},
+      "targets": [
+        {
+          "expr": "rate(ddos_defense_mitigation_actions_total[5m])",
+          "legendFormat": "Actions/sec",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Detection Latency",
+      "type": "graph",
+      "gridPos": {"x": 0, "y": 8, "w": 12, "h": 8},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(ddos_defense_detection_latency_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p99",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(ddos_defense_detection_latency_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(ddos_defense_detection_latency_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p50",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "title": "Attack Types Distribution",
+      "type": "piechart",
+      "gridPos": {"x": 12, "y": 8, "w": 12, "h": 8},
+      "targets": [
+        {
+          "expr": "sum(ddos_defense_attacks_detected) by (attack_type)",
+          "legendFormat": "{{attack_type}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Service Health",
+      "type": "stat",
+      "gridPos": {"x": 0, "y": 16, "w": 6, "h": 4},
+      "targets": [
+        {
+          "expr": "ddos_defense_service_up{service=\"ingestion\"}",
+          "legendFormat": "Ingestion",
+          "refId": "A"
+        },
+        {
+          "expr": "ddos_defense_service_up{service=\"detection\"}",
+          "legendFormat": "Detection",
+          "refId": "B"
+        },
+        {
+          "expr": "ddos_defense_service_up{service=\"mitigation\"}",
+          "legendFormat": "Mitigation",
+          "refId": "C"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": ["last"]
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
       }
-    ],
-    "tags": ["ddos", "security", "network"],
-    "schemaVersion": 27,
-    "version": 1
-  },
-  "folderId": 0,
-  "overwrite": true
+    },
+    {
+      "title": "Unified Alert Severity Distribution",
+      "type": "piechart",
+      "gridPos": {"x": 6, "y": 16, "w": 9, "h": 8},
+      "targets": [
+        {
+          "expr": "sum(ddos_defense_attacks_detected) by (severity)",
+          "legendFormat": "Severity {{severity}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Kafka Pipeline Throughput",
+      "type": "graph",
+      "gridPos": {"x": 15, "y": 16, "w": 9, "h": 8},
+      "targets": [
+        {
+          "expr": "rate(ddos_defense_kafka_messages_sent[5m])",
+          "legendFormat": "Sent/sec",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(ddos_defense_kafka_messages_received[5m])",
+          "legendFormat": "Received/sec",
+          "refId": "B"
+        }
+      ]
+    }
+  ],
+  "tags": ["ddos", "security", "network"],
+  "schemaVersion": 27,
+  "version": 1
 }

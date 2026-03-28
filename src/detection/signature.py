@@ -5,9 +5,11 @@ systems (IDS) to detect known DDoS attack patterns using rule sets.
 """
 
 import asyncio
+import json
 import os
 import re
 import subprocess
+import shutil
 import tempfile
 import time
 from typing import Optional, Dict, Any, List, Callable
@@ -18,6 +20,7 @@ import structlog
 from ..common.logging import get_logger
 from ..common.metrics import metrics
 from ..common.kafka_consumer import KafkaConsumerHelper
+from ..common.kafka_producer import TelemetryProducer
 
 logger = get_logger(__name__)
 
@@ -41,6 +44,7 @@ class SignatureDetector:
         batch_size: int = 1000,
         timeout_ms: int = 1000,
         reload_interval: int = 300,  # seconds
+        producer: Optional[TelemetryProducer] = None,
     ):
         """Initialize signature detector.
 
@@ -62,6 +66,7 @@ class SignatureDetector:
         self.batch_size = batch_size
         self.timeout_ms = timeout_ms
         self.reload_interval = reload_interval
+        self.producer = producer
 
         self._running = False
         self._consumer: Optional[KafkaConsumerHelper] = None
@@ -111,6 +116,11 @@ class SignatureDetector:
 
         # Validate rules with engine-specific command
         if self.engine == "snort":
+            if shutil.which("snort") is None:
+                logger.info("Snort binary not available, skipping rule validation", engine=self.engine)
+                self._stats["rules_loaded"] = len(rule_files)
+                self._stats["last_reload"] = time.time()
+                return len(rule_files)
             try:
                 result = subprocess.run(
                     ["snort", "-c", self._temp_rules_file.name, "-T"],
@@ -124,6 +134,11 @@ class SignatureDetector:
                 logger.error("Snort rule validation error", error=str(e))
                 return 0
         elif self.engine == "suricata":
+            if shutil.which("suricata") is None:
+                logger.info("Suricata binary not available, skipping rule validation", engine=self.engine)
+                self._stats["rules_loaded"] = len(rule_files)
+                self._stats["last_reload"] = time.time()
+                return len(rule_files)
             try:
                 result = subprocess.run(
                     ["suricata", "-T", "-S", self._temp_rules_file.name],
@@ -167,9 +182,18 @@ class SignatureDetector:
             if packet.get("tcp_flags") == 0x02:  # SYN flag only
                 # Check rate (would need state; simplified)
                 alerts.append({
+                    "detector": "signature",
                     "rule_id": 100001,
                     "rule_name": "TCP SYN flood",
+                    "type": "syn_flood",
+                    "subtype": "tcp_syn",
+                    "confidence": 0.72,
                     "severity": 3,
+                    "source_ip": packet.get("src_ip"),
+                    "source_ips": [packet.get("src_ip")] if packet.get("src_ip") else [],
+                    "target_ip": packet.get("dst_ip"),
+                    "target": packet.get("dst_ip", "unknown"),
+                    "telemetry_source": "packet_capture",
                     "packet": packet,
                     "timestamp": time.time(),
                 })
@@ -177,9 +201,18 @@ class SignatureDetector:
         # Example: ICMP flood
         if packet.get("protocol") == 1:  # ICMP
             alerts.append({
+                "detector": "signature",
                 "rule_id": 100002,
                 "rule_name": "ICMP flood",
+                "type": "icmp_flood",
+                "subtype": "icmp",
+                "confidence": 0.68,
                 "severity": 2,
+                "source_ip": packet.get("src_ip"),
+                "source_ips": [packet.get("src_ip")] if packet.get("src_ip") else [],
+                "target_ip": packet.get("dst_ip"),
+                "target": packet.get("dst_ip", "unknown"),
+                "telemetry_source": "packet_capture",
                 "packet": packet,
                 "timestamp": time.time(),
             })
@@ -188,9 +221,18 @@ class SignatureDetector:
         if packet.get("protocol") == 17:  # UDP
             if packet.get("dst_port") == 53:
                 alerts.append({
+                    "detector": "signature",
                     "rule_id": 100003,
                     "rule_name": "DNS amplification",
+                    "type": "amplification",
+                    "subtype": "dns",
+                    "confidence": 0.84,
                     "severity": 4,
+                    "source_ip": packet.get("src_ip"),
+                    "source_ips": [packet.get("src_ip")] if packet.get("src_ip") else [],
+                    "target_ip": packet.get("dst_ip"),
+                    "target": packet.get("dst_ip", "unknown"),
+                    "telemetry_source": "packet_capture",
                     "packet": packet,
                     "timestamp": time.time(),
                 })
@@ -202,6 +244,8 @@ class SignatureDetector:
         batch_alerts = []
         for msg in messages:
             try:
+                if isinstance(msg, str):
+                    msg = json.loads(msg)
                 alerts = await self._process_packet(msg)
                 if alerts:
                     batch_alerts.extend(alerts)
@@ -237,6 +281,7 @@ class SignatureDetector:
             group_id="signature-detector",
             batch_size=self.batch_size,
             batch_timeout_ms=self.timeout_ms,
+            producer=self.producer,
         )
         await self._consumer.start()
 

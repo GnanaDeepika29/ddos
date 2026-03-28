@@ -11,9 +11,11 @@ import argparse
 from typing import Optional
 
 import structlog
+from prometheus_client import start_http_server
 
 from ..common.logging import get_logger, setup_logging
 from ..common.config import load_config
+from ..common.metrics import metrics
 from .packet_capture import PacketCapture
 from .flow_collector import FlowCollector
 from .telemetry_grpc import TelemetryGRPC
@@ -50,10 +52,12 @@ class IngestionService:
 
         # Initialize Kafka producer
         kafka_config = self.config.get("kafka", {})
+        kafka_topics = kafka_config.get("topics", {})
         self.producer = TelemetryProducer(
             bootstrap_servers=kafka_config.get("bootstrap_servers"),
             batch_size=kafka_config.get("producer_batch_size", 100),
             batch_timeout_ms=kafka_config.get("producer_linger_ms", 100),
+            send_timeout_ms=kafka_config.get("producer_send_timeout_ms", 10000),
             compression_type=kafka_config.get("compression_type", "gzip"),
         )
         await self.producer.start()
@@ -70,6 +74,7 @@ class IngestionService:
                 buffer_size=capture_config.get("buffer_size", 2097152),
                 filter=capture_config.get("filter", ""),
                 producer=self.producer,
+                output_topic=kafka_topics.get("telemetry_raw", "telemetry.raw"),
             )
             # Packet capture runs its own tasks; we'll start it as an async task
             capture_task = asyncio.create_task(self.packet_capture.start())
@@ -86,6 +91,7 @@ class IngestionService:
                 collector_type=flow_config.get("collector_type", "netflow"),
                 producer=self.producer,
                 buffer_size=flow_config.get("buffer_size", 65536),
+                output_topic=kafka_topics.get("flows", "telemetry.flows"),
             )
             flow_task = asyncio.create_task(self.flow_collector.start())
             self._tasks.append(flow_task)
@@ -104,6 +110,7 @@ class IngestionService:
                 producer=self.producer,
                 subscribe_paths=gnmi_config.get("subscribe_paths", []),
                 sample_interval_ms=gnmi_config.get("sample_interval_ms", 1000),
+                output_topic=kafka_topics.get("telemetry_raw", "telemetry.raw"),
             )
             gnmi_task = asyncio.create_task(self.telemetry_grpc.start())
             self._tasks.append(gnmi_task)
@@ -155,6 +162,11 @@ async def main():
 
     # Setup logging
     setup_logging(level=config.get("log_level", "INFO"))
+    prom_cfg = config.get("monitoring", {}).get("prometheus", {})
+    metrics_port = prom_cfg.get("port", 9090)
+    if prom_cfg.get("enabled", True):
+        start_http_server(metrics_port, registry=metrics._registry)
+    metrics.service_up.labels(service="ingestion").set(1)
 
     service = IngestionService(config)
 
@@ -179,6 +191,7 @@ async def main():
     except asyncio.CancelledError:
         pass
     finally:
+        metrics.service_up.labels(service="ingestion").set(0)
         logger.info("Ingestion service exiting")
 
 

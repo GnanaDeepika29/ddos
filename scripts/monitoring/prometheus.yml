@@ -48,21 +48,10 @@ scrape_configs:
       - targets: ['mitigation:9090']
     scrape_interval: 10s
 
-  # Kafka metrics (if JMX exporter is set up)
-  - job_name: 'kafka'
-    static_configs:
-      - targets: ['kafka:9092']
-    metrics_path: '/metrics'
-    scrape_interval: 30s
+  # Kafka metrics require a dedicated exporter; do not scrape the broker port directly.
+  # Example target when a kafka-exporter or JMX exporter is added:
+  # - job_name: 'kafka'
+  #   static_configs:
+  #     - targets: ['kafka-exporter:9308']
 
-  # PostgreSQL metrics (requires postgres_exporter)
-  - job_name: 'postgresql'
-    static_configs:
-      - targets: ['postgres-exporter:9187']
-    scrape_interval: 30s
-
-  # Redis metrics (requires redis_exporter)
-  - job_name: 'redis'
-    static_configs:
-      - targets: ['redis-exporter:9121']
-    scrape_interval: 30s
+  # PostgreSQL and Redis exporter jobs can be enabled when exporters are added.

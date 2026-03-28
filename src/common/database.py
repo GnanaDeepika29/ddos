@@ -6,6 +6,7 @@ functions for TimescaleDB (PostgreSQL) used for metrics and historical data.
 
 import asyncio
 import contextlib
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List, AsyncIterator, Union
 from contextlib import asynccontextmanager
 
@@ -272,7 +273,7 @@ class DatabaseConnection:
             alert.get("confidence"),
             alert.get("target"),
             json.dumps(alert),
-            alert.get("timestamp", asyncio.get_event_loop().time()),
+            datetime.fromtimestamp(alert.get("timestamp", datetime.now(timezone.utc).timestamp()), tz=timezone.utc),
         )
 
     async def insert_metric(self, name: str, value: float, tags: Optional[Dict[str, Any]] = None) -> None:

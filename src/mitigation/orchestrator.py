@@ -14,6 +14,7 @@ import structlog
 from ..common.logging import get_logger
 from ..common.metrics import metrics
 from ..common.kafka_consumer import KafkaConsumerHelper
+from ..common.kafka_producer import TelemetryProducer
 from .actions import (
     RateLimiter,
     BGPRouteAnnouncer,
@@ -40,6 +41,9 @@ class MitigationOrchestrator:
         dry_run: bool = False,
         action_timeout: int = 30,
         rollback_delay: int = 300,
+        producer: Optional[TelemetryProducer] = None,
+        rate_limit_config: Optional[Dict[str, Any]] = None,
+        scrubbing_config: Optional[Dict[str, Any]] = None,
     ):
         """Initialize mitigation orchestrator.
 
@@ -63,6 +67,9 @@ class MitigationOrchestrator:
         self.dry_run = dry_run
         self.action_timeout = action_timeout
         self.rollback_delay = rollback_delay
+        self.producer = producer
+        self.rate_limit_config = rate_limit_config or {}
+        self.scrubbing_config = scrubbing_config or {}
 
         self._running = False
         self._consumer: Optional[KafkaConsumerHelper] = None
@@ -76,8 +83,8 @@ class MitigationOrchestrator:
         }
 
         # Initialize action modules
-        self.rate_limiter = RateLimiter(dry_run=dry_run)
-        self.bgp_announcer = BGPRouteAnnouncer(dry_run=dry_run)
+        self.rate_limiter = RateLimiter(dry_run=dry_run, policy_config=self.rate_limit_config)
+        self.bgp_announcer = BGPRouteAnnouncer(dry_run=dry_run, config=self.scrubbing_config)
         self.sdn_controller = SDNController(dry_run=dry_run)
         self.cloud_security = CloudSecurityGroups(dry_run=dry_run)
         self.blacklist_manager = BlacklistManager(dry_run=dry_run)
@@ -215,6 +222,7 @@ class MitigationOrchestrator:
             group_id="mitigation-orchestrator",
             batch_size=self.batch_size,
             batch_timeout_ms=self.batch_timeout_ms,
+            producer=self.producer,
         )
         await self._consumer.start()
 

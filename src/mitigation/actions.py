@@ -20,13 +20,16 @@ logger = get_logger(__name__)
 class RateLimiter:
     """Rate limiting using iptables, tc, or cloud APIs."""
 
-    def __init__(self, dry_run: bool = False):
+    def __init__(self, dry_run: bool = False, policy_config: Optional[Dict[str, Any]] = None):
         self.dry_run = dry_run
+        self.policy_config = policy_config or {}
         self._active_limits: Dict[str, Dict[str, Any]] = {}
+        global_policy = self.policy_config.get("global", {})
+        self.default_pps = global_policy.get("pps", 10)
 
     async def start(self):
         """Initialize rate limiter."""
-        logger.info("RateLimiter started", dry_run=self.dry_run)
+        logger.info("RateLimiter started", dry_run=self.dry_run, default_pps=self.default_pps)
 
     async def stop(self):
         """Clean up rate limiter."""
@@ -56,7 +59,7 @@ class RateLimiter:
             cmd = [
                 "iptables", "-A", "INPUT",
                 "-s", target,
-                "-m", "limit", "--limit", "10/second",
+                "-m", "limit", "--limit", f"{self.default_pps}/second",
                 "-j", "ACCEPT"
             ]
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
@@ -67,7 +70,7 @@ class RateLimiter:
             cmd_drop = [
                 "iptables", "-A", "INPUT",
                 "-s", target,
-                "-m", "limit", "--limit", "10/second",
+                "-m", "limit", "--limit", f"{self.default_pps}/second",
                 "-j", "DROP"
             ]
             subprocess.run(cmd_drop, capture_output=True, timeout=10)
@@ -93,14 +96,14 @@ class RateLimiter:
             cmd = [
                 "iptables", "-D", "INPUT",
                 "-s", target,
-                "-m", "limit", "--limit", "10/second",
+                "-m", "limit", "--limit", f"{self.default_pps}/second",
                 "-j", "ACCEPT"
             ]
             subprocess.run(cmd, capture_output=True, timeout=10)
             cmd_drop = [
                 "iptables", "-D", "INPUT",
                 "-s", target,
-                "-m", "limit", "--limit", "10/second",
+                "-m", "limit", "--limit", f"{self.default_pps}/second",
                 "-j", "DROP"
             ]
             subprocess.run(cmd_drop, capture_output=True, timeout=10)
@@ -115,9 +118,16 @@ class RateLimiter:
 class BGPRouteAnnouncer:
     """BGP route announcement for traffic scrubbing."""
 
-    def __init__(self, dry_run: bool = False):
+    def __init__(self, dry_run: bool = False, config: Optional[Dict[str, Any]] = None):
         self.dry_run = dry_run
+        self.config = config or {}
         self._active_announcements: Dict[str, Dict[str, Any]] = {}
+
+    def _select_scrubbing_center(self) -> Optional[Dict[str, Any]]:
+        centers = self.config.get("scrubbing_centers", [])
+        if not centers:
+            return None
+        return sorted(centers, key=lambda center: center.get("priority", 999))[0]
 
     async def start(self):
         """Initialize BGP announcer."""
@@ -133,7 +143,8 @@ class BGPRouteAnnouncer:
             return {"action": "bgp_announce", "status": "already_applied", "target": target}
 
         if self.dry_run:
-            logger.info("DRY RUN: Would announce BGP route", target=target)
+            center = self._select_scrubbing_center()
+            logger.info("DRY RUN: Would announce BGP route", target=target, scrubbing_center=center.get("name") if center else None)
             self._active_announcements[target] = {"target": target, "timestamp": alert.get("timestamp")}
             return {"action": "bgp_announce", "status": "dry_run", "target": target}
 

@@ -47,6 +47,7 @@ class FlowCollector:
         collector_type: str = "netflow",  # netflow, sflow, nfstream
         producer: Optional[TelemetryProducer] = None,
         buffer_size: int = 65536,
+        output_topic: str = "telemetry.flows",
     ):
         """Initialize flow collector.
 
@@ -62,8 +63,10 @@ class FlowCollector:
         self.listen_port = listen_port
         self.protocol = protocol
         self.collector_type = collector_type
+        self._owns_producer = producer is None
         self.producer = producer or TelemetryProducer()
         self.buffer_size = buffer_size
+        self.output_topic = output_topic
 
         self._running = False
         self._sock: Optional[socket.socket] = None
@@ -339,7 +342,7 @@ class FlowCollector:
             return
         try:
             await self.producer.send_batch(
-                topic="telemetry.flows",
+                topic=self.output_topic,
                 messages=flows,
             )
             metrics.flows_total.inc(len(flows))
@@ -387,7 +390,8 @@ class FlowCollector:
         self._running = False
         if self._sock:
             self._sock.close()
-        await self.producer.close()
+        if self._owns_producer:
+            await self.producer.stop()
 
     def get_stats(self) -> Dict[str, Any]:
         """Get collector statistics."""
@@ -417,7 +421,8 @@ class NFStreamCollector:
         pass
 
     async def stop(self):
-        await self.producer.close()
+        if self._owns_producer:
+            await self.producer.stop()
 
 
 def main():

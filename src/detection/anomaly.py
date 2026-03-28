@@ -6,6 +6,7 @@ time-series forecasting, and correlation analysis.
 """
 
 import asyncio
+import json
 import time
 import math
 import numpy as np
@@ -19,6 +20,7 @@ import structlog
 from ..common.logging import get_logger
 from ..common.metrics import metrics
 from ..common.kafka_consumer import KafkaConsumerHelper
+from ..common.kafka_producer import TelemetryProducer
 
 logger = get_logger(__name__)
 
@@ -74,6 +76,7 @@ class AnomalyDetector:
         window_seconds: int = 60,
         baseline_window_seconds: int = 3600,
         deviation_factor: float = 3.0,
+        producer: Optional[TelemetryProducer] = None,
     ):
         """Initialize anomaly detector.
 
@@ -107,6 +110,7 @@ class AnomalyDetector:
         self.window_seconds = window_seconds
         self.baseline_window_seconds = baseline_window_seconds
         self.deviation_factor = deviation_factor
+        self.producer = producer
 
         # Internal state
         self._running = False
@@ -135,6 +139,15 @@ class AnomalyDetector:
 
         self._window_start = time.time()
         self._window_flows = 0
+
+    def _top_keys(self, counts: Dict[Any, int], limit: int = 5) -> List[Any]:
+        return [key for key, _ in sorted(counts.items(), key=lambda item: item[1], reverse=True)[:limit] if key not in ("", None)]
+
+    def _confidence_from_ratio(self, value: float, threshold: float, minimum: float = 0.6, maximum: float = 0.99) -> float:
+        if threshold <= 0:
+            return minimum
+        ratio = max(0.0, value / threshold)
+        return round(min(maximum, minimum + min(1.0, ratio - 1.0) * 0.25), 3)
 
     def _compute_entropy(self, counts: Dict[Any, int]) -> float:
         """Compute Shannon entropy of a distribution."""
@@ -208,23 +221,38 @@ class AnomalyDetector:
         pps = total_packets / self.window_seconds
 
         alerts = []
+        dominant_dst_ip = self._top_keys(self._dst_ip_counts, limit=1)
+        dominant_src_ips = self._top_keys(self._src_ip_counts, limit=5)
+        primary_target = dominant_dst_ip[0] if dominant_dst_ip else "unknown"
         if mbps > self.volumetric_mbps_threshold:
             alerts.append({
+                "detector": "anomaly",
                 "type": "volumetric",
                 "subtype": "bandwidth",
+                "confidence": self._confidence_from_ratio(mbps, self.volumetric_mbps_threshold, minimum=0.7),
                 "severity": 3,
                 "value": mbps,
                 "threshold": self.volumetric_mbps_threshold,
+                "target_ip": primary_target,
+                "target": primary_target,
+                "source_ips": dominant_src_ips,
+                "telemetry_source": "flow_analysis",
                 "window_seconds": self.window_seconds,
                 "timestamp": time.time(),
             })
         if pps > self.volumetric_pps_threshold:
             alerts.append({
+                "detector": "anomaly",
                 "type": "volumetric",
                 "subtype": "packet_rate",
+                "confidence": self._confidence_from_ratio(pps, self.volumetric_pps_threshold, minimum=0.72),
                 "severity": 3,
                 "value": pps,
                 "threshold": self.volumetric_pps_threshold,
+                "target_ip": primary_target,
+                "target": primary_target,
+                "source_ips": dominant_src_ips,
+                "telemetry_source": "flow_analysis",
                 "window_seconds": self.window_seconds,
                 "timestamp": time.time(),
             })
@@ -238,21 +266,33 @@ class AnomalyDetector:
 
         if src_entropy < self.entropy_threshold:
             alerts.append({
+                "detector": "anomaly",
                 "type": "entropy",
                 "subtype": "src_ip",
+                "confidence": 0.66,
                 "severity": 2,
                 "value": src_entropy,
                 "threshold": self.entropy_threshold,
+                "target_ip": primary_target,
+                "target": primary_target,
+                "source_ips": dominant_src_ips,
+                "telemetry_source": "flow_analysis",
                 "window_seconds": self.window_seconds,
                 "timestamp": time.time(),
             })
         if dst_entropy < self.entropy_threshold:
             alerts.append({
+                "detector": "anomaly",
                 "type": "entropy",
                 "subtype": "dst_ip",
+                "confidence": 0.69,
                 "severity": 2,
                 "value": dst_entropy,
                 "threshold": self.entropy_threshold,
+                "target_ip": primary_target,
+                "target": primary_target,
+                "source_ips": dominant_src_ips,
+                "telemetry_source": "flow_analysis",
                 "window_seconds": self.window_seconds,
                 "timestamp": time.time(),
             })
@@ -262,10 +302,15 @@ class AnomalyDetector:
         for (dst_ip, sec), count in self._syn_per_sec.items():
             if sec >= self._window_start and count > self.syn_flood_threshold:
                 alerts.append({
+                    "detector": "anomaly",
                     "type": "syn_flood",
                     "subtype": "tcp_syn",
+                    "confidence": self._confidence_from_ratio(count, self.syn_flood_threshold, minimum=0.8),
                     "severity": 4,
                     "target_ip": dst_ip,
+                    "target": dst_ip,
+                    "source_ips": dominant_src_ips,
+                    "telemetry_source": "flow_analysis",
                     "value": count,
                     "threshold": self.syn_flood_threshold,
                     "timestamp": sec,
@@ -274,9 +319,15 @@ class AnomalyDetector:
         for sec, count in self._icmp_per_sec.items():
             if sec >= self._window_start and count > self.icmp_flood_threshold:
                 alerts.append({
+                    "detector": "anomaly",
                     "type": "icmp_flood",
                     "subtype": "icmp",
+                    "confidence": self._confidence_from_ratio(count, self.icmp_flood_threshold, minimum=0.75),
                     "severity": 3,
+                    "target_ip": primary_target,
+                    "target": primary_target,
+                    "source_ips": dominant_src_ips,
+                    "telemetry_source": "flow_analysis",
                     "value": count,
                     "threshold": self.icmp_flood_threshold,
                     "timestamp": sec,
@@ -310,6 +361,8 @@ class AnomalyDetector:
         self._pending_alerts = []
         for msg in messages:
             try:
+                if isinstance(msg, str):
+                    msg = json.loads(msg)
                 self._update_windows(msg)
             except Exception as e:
                 logger.error("Error processing flow", error=str(e))
@@ -339,6 +392,7 @@ class AnomalyDetector:
             group_id="anomaly-detector",
             batch_size=self.batch_size,
             batch_timeout_ms=self.batch_timeout_ms,
+            producer=self.producer,
         )
         await self._consumer.start()
 

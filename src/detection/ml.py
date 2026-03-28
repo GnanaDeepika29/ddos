@@ -5,6 +5,7 @@ This module implements ML-based detection using pre-trained models
 """
 
 import asyncio
+import json
 import joblib
 import numpy as np
 import time
@@ -18,6 +19,7 @@ import structlog
 from ..common.logging import get_logger
 from ..common.metrics import metrics
 from ..common.kafka_consumer import KafkaConsumerHelper
+from ..common.kafka_producer import TelemetryProducer
 
 logger = get_logger(__name__)
 
@@ -68,6 +70,7 @@ class MLDetector:
         batch_timeout_ms: int = 1000,
         confidence_threshold: float = 0.85,
         inference_mode: str = "batch",  # sync, async, batch
+        producer: Optional[TelemetryProducer] = None,
     ):
         """Initialize ML detector.
 
@@ -91,6 +94,7 @@ class MLDetector:
         self.batch_timeout_ms = batch_timeout_ms
         self.confidence_threshold = confidence_threshold
         self.inference_mode = inference_mode
+        self.producer = producer
 
         self._running = False
         self._consumer: Optional[KafkaConsumerHelper] = None
@@ -224,9 +228,15 @@ class MLDetector:
             if pred == 1 and confidence >= self.confidence_threshold:
                 # Generate alert
                 alert = {
+                    "detector": "ml",
                     "type": "ml_detection",
                     "model": os.path.basename(self.model_path),
                     "confidence": confidence,
+                    "source_ip": flow.get("src_ip"),
+                    "source_ips": [flow.get("src_ip")] if flow.get("src_ip") else [],
+                    "target_ip": flow.get("dst_ip"),
+                    "target": flow.get("dst_ip", "unknown"),
+                    "telemetry_source": "flow_analysis",
                     "flow": flow,
                     "timestamp": time.time(),
                     "severity": 3 if confidence > 0.95 else 2,
@@ -241,6 +251,8 @@ class MLDetector:
         """Process a batch of flows."""
         alerts = []
         for msg in messages:
+            if isinstance(msg, str):
+                msg = json.loads(msg)
             alert = await self._process_flow(msg)
             if alert:
                 alerts.append(alert)
@@ -278,6 +290,7 @@ class MLDetector:
             group_id="ml-detector",
             batch_size=self.batch_size,
             batch_timeout_ms=self.batch_timeout_ms,
+            producer=self.producer,
         )
         await self._consumer.start()
 

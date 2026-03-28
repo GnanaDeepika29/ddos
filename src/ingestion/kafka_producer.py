@@ -30,6 +30,7 @@ class TelemetryProducer:
         topic: str = "telemetry.raw",
         batch_size: int = 100,
         batch_timeout_ms: int = 100,
+        send_timeout_ms: int = 10000,
         retries: int = 3,
         compression_type: str = "gzip",
         dry_run: bool = False,
@@ -41,7 +42,8 @@ class TelemetryProducer:
             bootstrap_servers: List of Kafka broker addresses.
             topic: Default topic for messages.
             batch_size: Maximum number of messages per batch.
-            batch_timeout_ms: Maximum time to wait for batch.
+            batch_timeout_ms: Maximum time to wait before flushing a batch.
+            send_timeout_ms: Maximum time to wait for broker acknowledgement.
             retries: Number of retries on failure.
             compression_type: Compression codec (none, gzip, snappy, lz4).
             **kwargs: Additional arguments for KafkaProducer.
@@ -50,6 +52,7 @@ class TelemetryProducer:
         self.default_topic = topic
         self.batch_size = batch_size
         self.batch_timeout_ms = batch_timeout_ms
+        self.send_timeout_ms = send_timeout_ms
         self.retries = retries
         self.compression_type = compression_type
         self.dry_run = dry_run
@@ -183,8 +186,8 @@ class TelemetryProducer:
                     await asyncio.sleep(0)
                 else:
                     future = self._producer.send(topic, value=msg, key=key)
-                    # Optionally wait for result (async)
-                    await asyncio.get_event_loop().run_in_executor(None, future.get, self.batch_timeout_ms / 1000)
+                    # Wait for broker acknowledgement using a real delivery timeout.
+                    await asyncio.get_event_loop().run_in_executor(None, future.get, self.send_timeout_ms / 1000)
                 self._stats["messages_sent"] += 1
                 metrics.kafka_messages_sent.inc()
             except Exception as e:
@@ -227,8 +230,8 @@ class TelemetryProducer:
                                 await asyncio.sleep(0)
                             else:
                                 future = self._producer.send(topic, value=msg, key=keys[i] if i < len(keys) else None)
-                                # Wait for send completion (non-blocking)
-                                await asyncio.get_event_loop().run_in_executor(None, future.get, self.batch_timeout_ms / 1000)
+                                # Wait for broker acknowledgement using a real delivery timeout.
+                                await asyncio.get_event_loop().run_in_executor(None, future.get, self.send_timeout_ms / 1000)
                             self._stats["messages_sent"] += 1
                             metrics.kafka_messages_sent.inc()
                         except Exception as e:
