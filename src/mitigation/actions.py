@@ -88,6 +88,7 @@ class RateLimiter:
 
         if self.dry_run:
             logger.info("DRY RUN: Would remove rate limit", target=target)
+            del self._active_limits[target]
             return {"action": "rate_limit_remove", "status": "dry_run", "target": target}
 
         try:
@@ -169,6 +170,7 @@ class BGPRouteAnnouncer:
 
         if self.dry_run:
             logger.info("DRY RUN: Would withdraw BGP route", target=target)
+            del self._active_announcements[target]
             return {"action": "bgp_withdraw", "status": "dry_run", "target": target}
 
         try:
@@ -266,6 +268,7 @@ class CloudSecurityGroups:
 
         if self.dry_run:
             logger.info("DRY RUN: Would remove cloud security group rule", target=target)
+            del self._active_rules[target]
             return {"action": "cloud_unblock", "status": "dry_run", "target": target}
 
         try:
@@ -304,6 +307,7 @@ class BlacklistManager:
 
             if self.dry_run:
                 logger.info("DRY RUN: Would blacklist", ip=src)
+                self._blacklist[src] = {"ip": src, "timestamp": alert.get("timestamp")}
                 results.append({"ip": src, "status": "dry_run"})
                 continue
 
@@ -332,6 +336,7 @@ class BlacklistManager:
 
             if self.dry_run:
                 logger.info("DRY RUN: Would unblacklist", ip=src)
+                del self._blacklist[src]
                 results.append({"ip": src, "status": "dry_run"})
                 continue
 

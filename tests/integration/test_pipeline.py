@@ -1,222 +1,164 @@
-"""Integration tests for the full detection-mitigation pipeline.
+"""Integration-oriented tests for the unified DDoS pipeline.
 
-These tests verify the end-to-end flow from telemetry ingestion through
-detection to mitigation, using a simulated environment with Kafka and
-mock components.
+These tests avoid depending on a live Kafka broker and instead verify that the
+major pipeline stages interoperate through their current contracts.
 """
 
-import pytest
 import asyncio
-import json
 import time
-import uuid
-from typing import Dict, Any, List
-from unittest.mock import AsyncMock, patch, MagicMock
+from collections import deque
+from unittest.mock import AsyncMock, Mock
 
-from src.ingestion.packet_capture import PacketCapture
-from src.detection.anomaly import AnomalyDetector
-from src.detection.ensemble import EnsembleDetector
+import pytest
+
 from src.detection.alert_generator import AlertGenerator
+from src.detection.anomaly import AnomalyDetector
+from src.detection.ensemble import DetectorResult, EnsembleDetector
+from src.ingestion.packet_capture import PacketCapture
+from src.ingestion.kafka_producer import TelemetryProducer
 from src.mitigation.orchestrator import MitigationOrchestrator
-from src.common.kafka_producer import TelemetryProducer
-from src.common.kafka_consumer import KafkaConsumerHelper
 
 
 @pytest.mark.asyncio
-class TestEndToEndPipeline:
-    """End-to-end pipeline integration tests."""
+class TestUnifiedPipeline:
+    """Validate the contracts between major pipeline stages."""
 
-    @pytest.fixture
-    async def kafka_producer(self):
-        """Create a Kafka producer for testing."""
-        producer = TelemetryProducer(
-            bootstrap_servers=["localhost:9092"],
-            batch_size=10,
-            batch_timeout_ms=100,
-            dry_run=True,
-        )
-        await producer.start()
-        yield producer
-        await producer.stop()
+    async def test_packet_capture_to_detection_contract(self):
+        producer = Mock(spec=TelemetryProducer)
+        producer.send_batch = AsyncMock()
 
-    @pytest.fixture
-    async def kafka_consumer(self):
-        """Create a Kafka consumer for testing."""
-        consumer = KafkaConsumerHelper(
-            bootstrap_servers=["localhost:9092"],
-            topic="alerts.enriched.test",
-            group_id="test-group",
-            batch_size=10,
-            batch_timeout_ms=100,
-        )
-        await consumer.start()
-        yield consumer
-        await consumer.stop()
-
-    @patch("src.ingestion.packet_capture.sniff")
-    async def test_ingestion_to_detection(self, mock_sniff, kafka_producer):
-        """Test that ingestion sends packets and detection processes them."""
-        # Mock sniff to simulate packets
-        def mock_sniff_callback(iface, prn, store, filter, stop_filter):
-            # Simulate a packet
-            prn({"src_ip": "192.168.1.1", "dst_ip": "10.0.0.1", "protocol": 6, "src_port": 12345, "dst_port": 80})
-            return
-
-        mock_sniff.side_effect = mock_sniff_callback
-
-        # Create a simple detection mock
-        detection = AnomalyDetector(
-            input_topic="telemetry.raw",
-            output_topic="detection.anomaly.alerts.test",
-            bootstrap_servers=["localhost:9092"],
-            batch_size=1,
-            batch_timeout_ms=100,
-            volumetric_mbps_threshold=10,
-        )
-
-        # Run for a short time and verify detection sent alert
-        detection_task = asyncio.create_task(detection.start())
-
-        # Let it run for a bit
-        await asyncio.sleep(2)
-
-        detection_task.cancel()
-        await detection_task
-
-        # Since we don't have actual Kafka running, we can't verify easily.
-        # In a real test, we'd check that an alert was produced.
-        # For this test, we just verify no exceptions.
-        assert detection._stats["flows_processed"] >= 0
-
-    @patch("src.mitigation.orchestrator.RateLimiter")
-    async def test_detection_to_mitigation(self, mock_rate_limiter, kafka_producer):
-        """Test that alerts trigger mitigation actions."""
-        # Setup mock rate limiter
-        mock_rate_limiter.return_value.apply = AsyncMock(return_value={"status": "success"})
-
-        # Create a simple alert and send to Kafka
-        alert = {
-            "alert_id": str(uuid.uuid4()),
-            "type": "volumetric",
-            "severity": 3,
-            "confidence": 0.9,
-            "target_ip": "10.0.0.1",
-            "timestamp": time.time(),
-            "suggested_actions": ["rate_limit"],
-        }
-
-        # Send alert to Kafka
-        await kafka_producer.send(topic="alerts.enriched.test", message=alert)
-
-        # Start mitigation orchestrator
-        orchestrator = MitigationOrchestrator(
-            input_topic="alerts.enriched.test",
-            output_topic="mitigation.events.test",
-            bootstrap_servers=["localhost:9092"],
-            auto_response=True,
-            dry_run=False,
-            rollback_delay=1,
-        )
-
-        # Patch the action modules with our mocks
-        orchestrator.rate_limiter = mock_rate_limiter.return_value
-
-        # Run for a short time
-        orchestrator_task = asyncio.create_task(orchestrator.start())
-        await asyncio.sleep(2)
-        orchestrator_task.cancel()
-        await orchestrator_task
-
-        # Verify that rate_limiter.apply was called
-        mock_rate_limiter.return_value.apply.assert_called_once()
-
-    @patch("src.detection.ensemble.KafkaConsumerHelper")
-    async def test_ensemble_correlation(self, mock_consumer):
-        """Test that ensemble detector correlates alerts correctly."""
-        # Simulate alerts from multiple detectors
-        now = time.time()
-        signature_alert = {
-            "type": "signature",
-            "confidence": 0.8,
-            "target_ip": "10.0.0.1",
-            "timestamp": now,
-            "severity": 2,
-        }
-        anomaly_alert = {
-            "type": "anomaly",
-            "confidence": 0.9,
-            "target_ip": "10.0.0.1",
-            "timestamp": now,
-            "severity": 3,
-        }
-
-        # Mock consumer to yield these alerts
-        async def mock_consume_batches():
-            yield [signature_alert]
-            yield [anomaly_alert]
-            await asyncio.sleep(0.1)
-
-        mock_consumer.return_value.consume_batches = mock_consume_batches
-
-        # Create ensemble detector
-        ensemble = EnsembleDetector(
-            input_topics=["test.signature", "test.anomaly"],
-            output_topic="test.ensemble",
-            bootstrap_servers=["localhost:9092"],
-            batch_size=10,
-            window_seconds=10,
-            alert_threshold=0.6,
-        )
-
-        # Run ensemble
-        ensemble_task = asyncio.create_task(ensemble.start())
-        await asyncio.sleep(1)
-        ensemble_task.cancel()
-        await ensemble_task
-
-        # Verify that ensemble produced an alert (we can check internal state)
-        # In a real test, we'd check Kafka output.
-        assert ensemble._stats["alerts_received"] >= 2
-
-    async def test_alert_generator_enrichment(self):
-        """Test alert enrichment."""
-        generator = AlertGenerator(enrichment_enabled=True)
-
-        raw_alert = {
-            "type": "syn_flood",
-            "severity": "high",
-            "target_ip": "10.0.0.1",
-            "confidence": 0.95,
-        }
-
-        enriched = generator._enrich_alert(raw_alert)
-
-        # Verify enrichment
-        assert "alert_id" in enriched
-        assert "timestamp" in enriched
-        assert enriched["severity"] == 3  # high -> 3
-        assert enriched["category"] == "Protocol"
-        assert enriched["description"] is not None
-        assert "suggested_actions" in enriched
-        assert len(enriched["suggested_actions"]) > 0
-
-    async def test_packet_capture_to_kafka(self, kafka_producer):
-        """Test that packet capture sends packets to Kafka."""
-        # This test would require real packet capture, which is hard to mock.
-        # We'll just verify the capture initializes and stops without error.
         capture = PacketCapture(
             interface="lo",
             backend="scapy",
             promiscuous=False,
-            producer=kafka_producer,
+            producer=producer,
+            output_topic="ddos.telemetry.raw.dev",
         )
-        # Start capture (will run in thread)
-        task = asyncio.create_task(capture.start())
-        await asyncio.sleep(1)
-        await capture.stop()
-        task.cancel()
-        await task
 
-        # Verify stats were recorded
-        stats = capture.get_stats()
-        assert "packets_processed" in stats
+        detector = AnomalyDetector(
+            input_topic="ddos.telemetry.flows.dev",
+            output_topic="detection.anomaly.alerts",
+            batch_size=10,
+            batch_timeout_ms=100,
+            volumetric_mbps_threshold=10,
+            volumetric_pps_threshold=1000,
+            producer=producer,
+        )
+        detector._consumer = Mock(producer=producer)
+
+        now = time.time()
+        flows = []
+        for idx in range(12):
+            flows.append(
+                {
+                    "timestamp": now,
+                    "bytes": 250000,
+                    "packets": 200,
+                    "protocol": 6,
+                    "src_ip": f"198.51.100.{idx + 1}",
+                    "dst_ip": "192.0.2.10",
+                    "src_port": 4000 + idx,
+                    "dst_port": 80,
+                    "tcp_flags": 0x02,
+                }
+            )
+
+        await detector._process_batch(flows)
+
+        assert detector._stats["flows_processed"] == len(flows)
+        producer.send_batch.assert_called_once()
+        _, kwargs = producer.send_batch.call_args
+        assert kwargs["topic"] == "detection.anomaly.alerts"
+        assert kwargs["messages"]
+        assert kwargs["messages"][0]["detector"] == "anomaly"
+        assert kwargs["messages"][0]["target_ip"] == "192.0.2.10"
+
+    async def test_ensemble_to_alert_generator_contract(self):
+        now = time.time()
+        detector = EnsembleDetector(
+            weights={"signature": 0.3, "anomaly": 0.7, "ml": 0.0},
+            alert_threshold=0.5,
+            window_seconds=10,
+        )
+        detector._alerts_queue = deque(
+            [
+                DetectorResult(
+                    "signature",
+                    {
+                        "detector": "signature",
+                        "type": "syn_flood",
+                        "target_ip": "192.0.2.10",
+                        "source_ips": ["198.51.100.21"],
+                    },
+                    0.72,
+                    now,
+                    3,
+                ),
+                DetectorResult(
+                    "anomaly",
+                    {
+                        "detector": "anomaly",
+                        "type": "syn_flood",
+                        "target_ip": "192.0.2.10",
+                        "source_ips": ["198.51.100.21", "198.51.100.22"],
+                    },
+                    0.92,
+                    now,
+                    4,
+                ),
+            ]
+        )
+
+        alerts = await detector._correlate_alerts()
+        assert len(alerts) == 1
+
+        generator = AlertGenerator(enrichment_enabled=True)
+        enriched = generator._enrich_alert(alerts[0])
+
+        assert enriched["detector"] == "ensemble"
+        assert enriched["platform"] == "Real-Time Distributed Denial of Service Attack Detection and Mitigation in Cloud Networks"
+        assert enriched["pipeline_stage"] == "enriched_alert"
+        assert enriched["target_ip"] == "192.0.2.10"
+        assert "suggested_actions" in enriched
+        assert enriched["schema_version"] == "1.0"
+
+    async def test_alert_to_mitigation_contract(self):
+        producer = Mock(spec=TelemetryProducer)
+        producer.send = AsyncMock()
+
+        orchestrator = MitigationOrchestrator(
+            input_topic="ddos.alerts.dev",
+            output_topic="ddos.mitigation.events.dev",
+            auto_response=True,
+            dry_run=True,
+            rollback_delay=1,
+            producer=producer,
+        )
+        orchestrator._consumer = Mock(producer=producer)
+
+        alert = {
+            "alert_id": "integration-test-alert",
+            "detector": "ensemble",
+            "type": "ddos_attack",
+            "severity": 4,
+            "confidence": 0.88,
+            "target_ip": "192.0.2.10",
+            "target": "192.0.2.10:syn_flood",
+            "source_ips": ["198.51.100.21", "198.51.100.22"],
+            "telemetry_source": "correlated_detection",
+            "pipeline_stage": "enriched_alert",
+            "platform": "Real-Time Distributed Denial of Service Attack Detection and Mitigation in Cloud Networks",
+            "schema_version": "1.0",
+            "suggested_actions": ["rate_limit", "blacklist_sources"],
+            "timestamp": time.time(),
+        }
+
+        await orchestrator._process_batch([alert])
+
+        assert orchestrator._stats["alerts_processed"] == 1
+        producer.send.assert_awaited_once()
+        _, kwargs = producer.send.call_args
+        assert kwargs["topic"] == "ddos.mitigation.events.dev"
+        assert kwargs["message"]["type"] == "mitigation"
+        assert kwargs["message"]["status"] == "dry_run"
+        assert kwargs["message"]["actions"] == ["rate_limit", "blacklist_sources"]

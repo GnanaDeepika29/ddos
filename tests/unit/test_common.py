@@ -1,12 +1,11 @@
 """Unit tests for common utilities."""
 
 import pytest
-import asyncio
 import os
 import tempfile
 import yaml
-from unittest.mock import patch, MagicMock, AsyncMock
-import structlog
+from pathlib import Path
+from unittest.mock import patch, AsyncMock
 
 from src.common.logging import setup_logging, get_logger
 from src.common.config import load_config, deep_merge, substitute_env_vars
@@ -77,6 +76,58 @@ class TestConfig:
             assert config["override"] == "dev_value"
             os.unlink(base_path)
             os.unlink(dev_path)
+
+    def test_load_config_component_defaults_with_env_override_precedence(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_dir = Path(tmpdir)
+            detection_dir = config_dir / "detection"
+            detection_dir.mkdir()
+
+            base_path = config_dir / "default.yaml"
+            dev_path = config_dir / "dev.yaml"
+            behavioral_path = detection_dir / "behavioral.yaml"
+
+            base_path.write_text(
+                yaml.safe_dump(
+                    {
+                        "detection": {
+                            "anomaly": {
+                                "syn_flood": {"threshold": 500},
+                                "entropy": {"threshold": 4.0},
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            dev_path.write_text(
+                yaml.safe_dump(
+                    {
+                        "detection": {
+                            "anomaly": {
+                                "syn_flood": {"threshold": 100},
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            behavioral_path.write_text(
+                yaml.safe_dump(
+                    {
+                        "entropy": {"threshold": 3.5, "window": 60},
+                        "tcp": {"syn_flood": {"threshold": 1000}},
+                        "baseline": {"deviation_factor": 3.0},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            config = load_config(str(base_path), env="dev")
+            assert config["detection"]["anomaly"]["syn_flood"]["threshold"] == 100
+            assert config["detection"]["anomaly"]["entropy"]["threshold"] == 3.5
+            assert config["detection"]["anomaly"]["windows"]["short"] == 60
+            assert config["detection"]["anomaly"]["behavioral_profile"]["tcp"]["syn_flood"]["threshold"] == 1000
 
 
 class TestMetrics:

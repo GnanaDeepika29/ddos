@@ -53,6 +53,7 @@ class IngestionService:
         # Initialize Kafka producer
         kafka_config = self.config.get("kafka", {})
         kafka_topics = kafka_config.get("topics", {})
+        ingestion_config = self.config.get("ingestion", {})
         self.producer = TelemetryProducer(
             bootstrap_servers=kafka_config.get("bootstrap_servers"),
             batch_size=kafka_config.get("producer_batch_size", 100),
@@ -63,8 +64,19 @@ class IngestionService:
         await self.producer.start()
         logger.info("Kafka producer started")
 
-        # Start packet capture if enabled
-        capture_config = self.config.get("ingestion", {}).get("packet_capture", {})
+        # Support both nested service-specific config blocks and the existing
+        # flat ingestion config used by the repo's YAML files.
+        capture_config = ingestion_config.get("packet_capture", {})
+        if not capture_config:
+            capture_config = {
+                "enabled": ingestion_config.get("enabled", True),
+                "interface": ingestion_config.get("interface", "eth0"),
+                "backend": ingestion_config.get("backend", "auto"),
+                "promiscuous": ingestion_config.get("promiscuous", True),
+                "snaplen": ingestion_config.get("snaplen", 1518),
+                "buffer_size": ingestion_config.get("buffer_size", 2097152),
+                "filter": ingestion_config.get("filter", ""),
+            }
         if capture_config.get("enabled", True):
             self.packet_capture = PacketCapture(
                 interface=capture_config.get("interface", "eth0"),
@@ -82,7 +94,17 @@ class IngestionService:
             logger.info("Packet capture started", interface=capture_config.get("interface"))
 
         # Start flow collector if enabled
-        flow_config = self.config.get("ingestion", {}).get("flow_collector", {})
+        flow_config = ingestion_config.get("flow_collector", {})
+        if not flow_config:
+            flow_export = ingestion_config.get("flow_export", {})
+            flow_config = {
+                "enabled": flow_export.get("enabled", False),
+                "listen_host": flow_export.get("listen_host", "0.0.0.0"),
+                "listen_port": flow_export.get("collector_port", 2055),
+                "protocol": flow_export.get("protocol", "udp"),
+                "collector_type": flow_export.get("collector_type", "netflow"),
+                "buffer_size": flow_export.get("buffer_size", 65536),
+            }
         if flow_config.get("enabled", False):
             self.flow_collector = FlowCollector(
                 listen_host=flow_config.get("listen_host", "0.0.0.0"),
@@ -98,7 +120,20 @@ class IngestionService:
             logger.info("Flow collector started", port=flow_config.get("listen_port"))
 
         # Start gNMI telemetry if enabled
-        gnmi_config = self.config.get("ingestion", {}).get("gnmi", {})
+        gnmi_config = ingestion_config.get("gnmi", {})
+        if not gnmi_config:
+            telemetry_stream = ingestion_config.get("telemetry_stream", {})
+            gnmi_config = {
+                "enabled": telemetry_stream.get("enabled", False),
+                "target_host": telemetry_stream.get("target_host"),
+                "target_port": telemetry_stream.get("grpc_port", 9339),
+                "username": telemetry_stream.get("username"),
+                "password": telemetry_stream.get("password"),
+                "tls": telemetry_stream.get("tls", True),
+                "ca_cert": telemetry_stream.get("ca_cert"),
+                "subscribe_paths": telemetry_stream.get("subscribe_paths", []),
+                "sample_interval_ms": telemetry_stream.get("sample_interval_ms", 1000),
+            }
         if gnmi_config.get("enabled", False):
             self.telemetry_grpc = TelemetryGRPC(
                 target_host=gnmi_config.get("target_host"),

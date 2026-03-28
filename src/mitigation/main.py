@@ -71,6 +71,7 @@ class MitigationService:
         self.orchestrator = MitigationOrchestrator(
             input_topic=mit_config.get("input_topic", kafka_topics.get("alerts", "alerts.enriched")),
             output_topic=mit_config.get("output_topic", kafka_topics.get("mitigation_events", "mitigation.events")),
+            control_topic=mit_config.get("control_topic", kafka_topics.get("control", "ddos.control")),
             bootstrap_servers=kafka_config.get("bootstrap_servers"),
             batch_size=mit_config.get("batch_size", 10),
             batch_timeout_ms=mit_config.get("batch_timeout_ms", 500),

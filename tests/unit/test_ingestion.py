@@ -123,6 +123,8 @@ class TestTelemetryGRPC:
 
     @pytest.fixture
     def telemetry(self):
+        if not getattr(__import__("src.ingestion.telemetry_grpc", fromlist=["GNMI_AVAILABLE"]), "GNMI_AVAILABLE"):
+            pytest.skip("gNMI proto modules not available in test environment")
         return TelemetryGRPC(
             target_host="localhost",
             target_port=9339,

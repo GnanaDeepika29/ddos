@@ -18,6 +18,7 @@ from ..common.config import load_config
 from ..common.kafka_producer import TelemetryProducer
 from ..common.kafka_consumer import KafkaConsumerHelper
 from ..common.metrics import metrics
+from ..common.database import db
 from .signature import SignatureDetector
 from .anomaly import AnomalyDetector
 from .ensemble import EnsembleDetector
@@ -69,6 +70,18 @@ class DetectionService:
         )
         await self.producer.start()
         logger.info("Kafka producer started")
+
+        db_config = self.config.get("database", {})
+        db.host = db_config.get("host", "localhost")
+        db.port = db_config.get("port", 5432)
+        db.database = db_config.get("name", "ddos_platform")
+        db.user = db_config.get("user", "ddos_user")
+        db.password = db_config.get("password")
+        db.min_pool_size = db_config.get("pool_size", 10)
+        db.max_pool_size = db_config.get("max_overflow", 20)
+        await db.connect()
+        await db.create_tables()
+        logger.info("Detection database connected")
 
         # Initialize detectors based on configuration
         detection_cfg = self.config.get("detection", {})
@@ -214,6 +227,8 @@ class DetectionService:
             await self.alert_generator.stop()
         if self.producer:
             await self.producer.stop()
+        if db._running:
+            await db.close()
 
         logger.info("Detection service stopped")
 

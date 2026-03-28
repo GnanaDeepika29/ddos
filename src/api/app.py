@@ -21,6 +21,7 @@ from ..common.logging import get_logger, setup_logging
 from ..common.metrics import metrics
 from ..common.config import load_config
 from ..common.database import db
+from ..common.kafka_producer import TelemetryProducer
 
 logger = get_logger(__name__)
 
@@ -86,10 +87,25 @@ class ManualOverride(BaseModel):
 app_state = {
     "start_time": time.time(),
     "config": None,
+    "producer": None,
+    "control_topic": None,
     "manual_override": False,
     "override_reason": None,
     "override_expiry": None,
 }
+
+
+def _normalize_alert_details(details: Any) -> Dict[str, Any]:
+    """Normalize stored alert details from JSONB/string into a dictionary."""
+    if isinstance(details, dict):
+        return details
+    if isinstance(details, str):
+        try:
+            parsed = json.loads(details)
+            return parsed if isinstance(parsed, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+    return {}
 
 
 @asynccontextmanager
@@ -111,10 +127,22 @@ async def lifespan(app: FastAPI):
     await db.connect()
     # Ensure tables exist
     await db.create_tables()
+    kafka_config = app_state["config"].get("kafka", {})
+    app_state["control_topic"] = kafka_config.get("topics", {}).get("control", "ddos.control")
+    app_state["producer"] = TelemetryProducer(
+        bootstrap_servers=kafka_config.get("bootstrap_servers"),
+        batch_size=kafka_config.get("producer_batch_size", 100),
+        batch_timeout_ms=kafka_config.get("producer_linger_ms", 100),
+        send_timeout_ms=kafka_config.get("producer_send_timeout_ms", 10000),
+        compression_type=kafka_config.get("compression_type", "gzip"),
+    )
+    await app_state["producer"].start()
     logger.info("Database connected")
     yield
     # Shutdown
     logger.info("Shutting down API server")
+    if app_state.get("producer"):
+        await app_state["producer"].stop()
     await db.close()
 
 
@@ -197,9 +225,9 @@ async def list_alerts(
 
     alerts = []
     for row in rows:
-        details = row["details"] or {}
+        details = _normalize_alert_details(row["details"])
         alerts.append(AlertResponse(
-            id=row["id"],
+            id=str(row["id"]),
             type=row["alert_type"],
             detector=details.get("detector"),
             category=details.get("category"),
@@ -229,9 +257,9 @@ async def get_alert(alert_id: str = Path(..., pattern=r"^[0-9a-fA-F-]{36}$")) ->
     )
     if not row:
         raise HTTPException(status_code=404, detail="Alert not found")
-    details = row["details"] or {}
+    details = _normalize_alert_details(row["details"])
     return AlertResponse(
-        id=row["id"],
+        id=str(row["id"]),
         type=row["alert_type"],
         detector=details.get("detector"),
         category=details.get("category"),
@@ -255,11 +283,8 @@ async def apply_mitigation(action: MitigationAction, background_tasks: Backgroun
     """Manually apply a mitigation action."""
     # Generate action ID
     action_id = str(uuid.uuid4())
-    # In production, this would send a message to Kafka for the mitigation orchestrator
-    # For now, we'll just log and return success
     logger.info(f"Manual mitigation action: {action.action} on {action.target} (id={action_id})")
-    background_tasks.add_task(
-        _send_mitigation_request,
+    await _send_mitigation_request(
         action_id,
         action.dict(),
     )
@@ -276,9 +301,8 @@ async def rollback_mitigation(
     background_tasks: BackgroundTasks = None,
 ) -> MitigationResponse:
     """Rollback a previously applied mitigation action."""
-    # This would look up the action and send a rollback request
     logger.info(f"Manual rollback requested for action {action_id}")
-    background_tasks.add_task(_send_rollback_request, action_id)
+    await _send_rollback_request(action_id)
     return MitigationResponse(
         success=True,
         message=f"Rollback requested for action {action_id}",
@@ -303,6 +327,7 @@ async def set_manual_override(override: ManualOverride) -> MitigationResponse:
         app_state["override_reason"] = None
         app_state["override_expiry"] = None
         message = "Manual override disabled"
+    await _send_override_request(override)
     logger.info(message)
     return MitigationResponse(
         success=True,
@@ -345,16 +370,52 @@ async def get_stats() -> Dict[str, Any]:
 
 
 async def _send_mitigation_request(action_id: str, action_data: Dict[str, Any]):
-    """Send a mitigation request to Kafka (placeholder)."""
-    # In a real implementation, we'd produce to Kafka
-    from ..common.kafka_consumer import KafkaConsumerHelper
-    # This is a placeholder - we'll just log
-    logger.info(f"Sending mitigation request: {action_data}")
+    """Send a mitigation request to Kafka."""
+    producer: Optional[TelemetryProducer] = app_state.get("producer")
+    if not producer:
+        raise RuntimeError("Control producer is not available")
+    message = {
+        "type": "mitigation_apply",
+        "command_id": action_id,
+        "timestamp": time.time(),
+        **action_data,
+    }
+    await producer.send(message, topic=app_state["control_topic"])
+    await producer.flush()
+    logger.info("Mitigation request queued", action_id=action_id, action=action_data.get("action"), target=action_data.get("target"))
 
 
 async def _send_rollback_request(action_id: str):
-    """Send a rollback request to Kafka (placeholder)."""
-    logger.info(f"Sending rollback request for action {action_id}")
+    """Send a rollback request to Kafka."""
+    producer: Optional[TelemetryProducer] = app_state.get("producer")
+    if not producer:
+        raise RuntimeError("Control producer is not available")
+    message = {
+        "type": "mitigation_rollback",
+        "action_id": action_id,
+        "timestamp": time.time(),
+    }
+    await producer.send(message, topic=app_state["control_topic"])
+    await producer.flush()
+    logger.info("Rollback request queued", action_id=action_id)
+
+
+async def _send_override_request(override: ManualOverride):
+    """Send manual override request to Kafka."""
+    producer: Optional[TelemetryProducer] = app_state.get("producer")
+    if not producer:
+        raise RuntimeError("Control producer is not available")
+    message = {
+        "type": "mitigation_override",
+        "command_id": str(uuid.uuid4()),
+        "enabled": override.enabled,
+        "reason": override.reason,
+        "duration": override.duration,
+        "timestamp": time.time(),
+    }
+    await producer.send(message, topic=app_state["control_topic"])
+    await producer.flush()
+    logger.info("Override request queued", enabled=override.enabled, reason=override.reason)
 
 
 def main():

@@ -46,16 +46,17 @@ def load_config(
     with open(base_path, "r") as f:
         config = yaml.safe_load(f) or {}
 
-    # Load environment-specific config if exists
+    # Load modular component configurations and fold them into the runtime config.
+    # These fragments provide the canonical component defaults.
+    config = load_component_configs(base_path.parent, config)
+
+    # Load environment-specific config after modular defaults so explicit
+    # dev/prod overrides still win where we intentionally tune behavior.
     env_config_path = base_path.parent / f"{env}.yaml"
     if env_config_path.exists():
         with open(env_config_path, "r") as f:
             env_config = yaml.safe_load(f) or {}
-        # Deep merge
         config = deep_merge(config, env_config)
-
-    # Load modular component configurations and fold them into the runtime config.
-    config = load_component_configs(base_path.parent, config)
 
     # Environment variable substitution
     if allow_env_override:
@@ -99,12 +100,11 @@ def integrate_component_configs(config: Dict[str, Any]) -> Dict[str, Any]:
         pps_cfg = volumetric_profile.get("pps", {})
         windows_cfg = volumetric_profile.get("windows", {})
         if "critical" in mbps_cfg:
-            volumetric_cfg.setdefault("threshold_mbps", mbps_cfg["critical"])
+            volumetric_cfg["threshold_mbps"] = mbps_cfg["critical"]
         if "critical" in pps_cfg:
-            volumetric_cfg.setdefault("threshold_pps", pps_cfg["critical"])
+            volumetric_cfg["threshold_pps"] = pps_cfg["critical"]
         if windows_cfg:
-            anomaly.setdefault("windows", {})
-            anomaly["windows"] = deep_merge(windows_cfg, anomaly["windows"])
+            anomaly["windows"] = deep_merge(anomaly.get("windows", {}), windows_cfg)
 
     behavioral_profile = detection.get("behavioral", {})
     if behavioral_profile:
@@ -112,32 +112,32 @@ def integrate_component_configs(config: Dict[str, Any]) -> Dict[str, Any]:
         if entropy_cfg:
             anomaly.setdefault("entropy", {})
             if "threshold" in entropy_cfg:
-                anomaly["entropy"].setdefault("threshold", entropy_cfg["threshold"])
+                anomaly["entropy"]["threshold"] = entropy_cfg["threshold"]
             if "features" in entropy_cfg:
-                anomaly["entropy"].setdefault("features", entropy_cfg["features"])
+                anomaly["entropy"]["features"] = entropy_cfg["features"]
             if "window" in entropy_cfg:
                 anomaly.setdefault("windows", {})
-                anomaly["windows"].setdefault("short", entropy_cfg["window"])
+                anomaly["windows"]["short"] = entropy_cfg["window"]
             if "baseline_window" in entropy_cfg:
                 anomaly.setdefault("windows", {})
-                anomaly["windows"].setdefault("long", entropy_cfg["baseline_window"])
+                anomaly["windows"]["long"] = entropy_cfg["baseline_window"]
 
         tcp_cfg = behavioral_profile.get("tcp", {})
         if tcp_cfg.get("syn_flood"):
             anomaly.setdefault("syn_flood", {})
-            anomaly["syn_flood"].setdefault("threshold", tcp_cfg["syn_flood"].get("threshold"))
+            anomaly["syn_flood"]["threshold"] = tcp_cfg["syn_flood"].get("threshold")
 
         icmp_cfg = behavioral_profile.get("icmp", {})
         if icmp_cfg:
             anomaly.setdefault("icmp_flood", {})
-            anomaly["icmp_flood"].setdefault(
-                "threshold",
-                icmp_cfg.get("flood_threshold", icmp_cfg.get("echo_flood_threshold")),
+            anomaly["icmp_flood"]["threshold"] = icmp_cfg.get(
+                "flood_threshold",
+                icmp_cfg.get("echo_flood_threshold"),
             )
 
         baseline_cfg = behavioral_profile.get("baseline", {})
         if baseline_cfg.get("deviation_factor") is not None:
-            anomaly.setdefault("deviation_factor", baseline_cfg["deviation_factor"])
+            anomaly["deviation_factor"] = baseline_cfg["deviation_factor"]
 
         anomaly["behavioral_profile"] = behavioral_profile
 
@@ -148,19 +148,19 @@ def integrate_component_configs(config: Dict[str, Any]) -> Dict[str, Any]:
         model_cfg = ml_profile.get("models", {}).get("ensemble", {})
         feature_cfg = ml_profile.get("feature_extractor", {})
         if "enabled" in general_cfg:
-            ml_cfg.setdefault("enabled", general_cfg["enabled"])
+            ml_cfg["enabled"] = general_cfg["enabled"]
         if "batch_size" in general_cfg:
-            ml_cfg.setdefault("batch_size", general_cfg["batch_size"])
+            ml_cfg["batch_size"] = general_cfg["batch_size"]
         if "confidence_threshold" in general_cfg:
-            ml_cfg.setdefault("confidence_threshold", general_cfg["confidence_threshold"])
+            ml_cfg["confidence_threshold"] = general_cfg["confidence_threshold"]
         if "inference_mode" in general_cfg:
-            ml_cfg.setdefault("inference_mode", general_cfg["inference_mode"])
+            ml_cfg["inference_mode"] = general_cfg["inference_mode"]
         if model_cfg.get("path"):
-            ml_cfg.setdefault("model_path", model_cfg["path"])
+            ml_cfg["model_path"] = model_cfg["path"]
         if feature_cfg.get("path"):
-            ml_cfg.setdefault("feature_extractor_path", feature_cfg["path"])
+            ml_cfg["feature_extractor_path"] = feature_cfg["path"]
         if feature_cfg.get("features"):
-            ml_cfg.setdefault("features", feature_cfg["features"])
+            ml_cfg["features"] = feature_cfg["features"]
         ml_cfg["model_profile"] = ml_profile
 
     mitigation = result.setdefault("mitigation", {})
@@ -169,14 +169,14 @@ def integrate_component_configs(config: Dict[str, Any]) -> Dict[str, Any]:
         rate_limiting = mitigation.setdefault("rate_limiting", {})
         global_cfg = rate_limits_profile.get("global", {})
         if global_cfg:
-            rate_limiting.setdefault("default_mbps", global_cfg.get("mbps", rate_limiting.get("default_mbps", 100)))
-            rate_limiting.setdefault("default_pps", global_cfg.get("pps", rate_limiting.get("default_pps", 5000)))
+            if global_cfg.get("mbps") is not None:
+                rate_limiting["default_mbps"] = global_cfg["mbps"]
+            if global_cfg.get("pps") is not None:
+                rate_limiting["default_pps"] = global_cfg["pps"]
             if global_cfg.get("per_ip"):
-                rate_limiting.setdefault("per_ip", {})
-                rate_limiting["per_ip"] = deep_merge(global_cfg["per_ip"], rate_limiting["per_ip"])
+                rate_limiting["per_ip"] = deep_merge(rate_limiting.get("per_ip", {}), global_cfg["per_ip"])
             if global_cfg.get("per_subnet"):
-                rate_limiting.setdefault("per_subnet", {})
-                rate_limiting["per_subnet"] = deep_merge(global_cfg["per_subnet"], rate_limiting["per_subnet"])
+                rate_limiting["per_subnet"] = deep_merge(rate_limiting.get("per_subnet", {}), global_cfg["per_subnet"])
         rate_limiting["policy_profile"] = rate_limits_profile
 
     scrubbing_profile = mitigation.get("scrubbing_centers", {})
@@ -187,9 +187,9 @@ def integrate_component_configs(config: Dict[str, Any]) -> Dict[str, Any]:
         if defaults_cfg:
             mitigation.setdefault("bgp", {})
             if defaults_cfg.get("announcement_duration") is not None:
-                mitigation["bgp"].setdefault("announcement_duration", defaults_cfg["announcement_duration"])
+                mitigation["bgp"]["announcement_duration"] = defaults_cfg["announcement_duration"]
             if defaults_cfg.get("community") is not None:
-                mitigation["bgp"].setdefault("community", defaults_cfg["community"])
+                mitigation["bgp"]["community"] = defaults_cfg["community"]
         mitigation["scrubbing_profile"] = scrubbing_profile
 
     return result

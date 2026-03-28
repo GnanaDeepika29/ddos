@@ -1,8 +1,8 @@
 """Unit tests for detection components."""
 
 import pytest
-import asyncio
 import time
+from collections import deque
 from unittest.mock import Mock, AsyncMock, patch
 from src.detection.anomaly import AnomalyDetector
 from src.detection.signature import SignatureDetector
@@ -76,7 +76,7 @@ class TestMLDetector:
 
     @patch("src.detection.ml.joblib.load")
     @patch("src.detection.ml.KafkaConsumerHelper")
-    async def test_load_model(self, mock_consumer, mock_load, detector):
+    async def test_load_model(self, mock_consumer, mock_load):
         # Skipped: would need actual model
         pass
 
@@ -133,9 +133,9 @@ class TestEnsembleDetector:
     async def test_correlate_alerts(self, mock_consumer, detector):
         now = time.time()
         alert1 = DetectorResult("signature", {"type": "flood", "target_ip": "10.0.0.1"}, 0.9, now, 3)
-        alert2 = DetectorResult("anomaly", {"type": "volumetric", "target_ip": "10.0.0.1"}, 0.8, now, 3)
-        detector._alerts_queue = [alert1, alert2]
-        ensemble_alerts = detector._correlate_alerts()
+        alert2 = DetectorResult("anomaly", {"type": "flood", "target_ip": "10.0.0.1"}, 0.8, now, 3)
+        detector._alerts_queue = deque([alert1, alert2])
+        ensemble_alerts = await detector._correlate_alerts()
         assert len(ensemble_alerts) == 1
-        assert ensemble_alerts[0]["confidence"] == 0.78
+        assert ensemble_alerts[0]["confidence"] == 0.83
         assert ensemble_alerts[0]["target"] == "10.0.0.1:flood"

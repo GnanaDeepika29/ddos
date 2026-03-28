@@ -18,6 +18,7 @@ from ..common.logging import get_logger
 from ..common.metrics import metrics
 from ..common.kafka_consumer import KafkaConsumerHelper
 from ..common.kafka_producer import TelemetryProducer
+from ..common.database import db
 
 logger = get_logger(__name__)
 
@@ -208,6 +209,13 @@ class AlertGenerator:
                     topic=self.output_topic,
                     messages=enriched_alerts,
                 )
+            for alert in enriched_alerts:
+                if db._running:
+                    try:
+                        await db.insert_alert(alert)
+                    except Exception as e:
+                        logger.error("Alert persistence failed", error=str(e), alert_id=alert.get("alert_id"))
+                        self._stats["errors"] += 1
             for alert in enriched_alerts:
                 metrics.record_attack(alert.get("type", "unknown"), alert.get("severity", 2))
             self._stats["alerts_published"] += len(enriched_alerts)
