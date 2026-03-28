@@ -1,0 +1,226 @@
+# Default Configuration for DDoS Defense Platform
+# Override with environment-specific configs (dev.yaml, prod.yaml)
+
+# Global settings
+environment: production
+log_level: INFO
+debug: false
+
+# Telemetry ingestion
+ingestion:
+  interface: eth0
+  promiscuous: true
+  snaplen: 1518
+  buffer_size: 2097152  # 2MB
+  flow_export:
+    enabled: true
+    collector_port: 2055
+    template_port: 2056
+    version: 9  # NetFlow v9
+  telemetry_stream:
+    enabled: false
+    grpc_port: 50051
+
+# Kafka topics
+kafka:
+  bootstrap_servers:
+    - localhost:9092
+  topics:
+    telemetry_raw: ddos.telemetry.raw
+    flows: ddos.telemetry.flows
+    alerts: ddos.alerts
+    mitigation_events: ddos.mitigation.events
+    control: ddos.control
+  consumer_group: ddos-defense-platform
+  producer_batch_size: 16384
+  producer_linger_ms: 5
+  compression_type: gzip
+
+# Detection configuration
+detection:
+  # Signature-based detection (Snort/Suricata)
+  signature:
+    enabled: true
+    rules_path: /etc/snort/rules/
+    reload_interval: 300  # seconds
+  # Statistical anomaly detection
+  anomaly:
+    enabled: true
+    windows:
+      short: 60   # seconds
+      medium: 300
+      long: 3600
+    volumetric:
+      threshold_mbps: 1000
+      threshold_pps: 500000
+    entropy:
+      threshold: 3.5
+      features:
+        - src_ip
+        - dst_ip
+        - src_port
+        - dst_port
+    syn_flood:
+      threshold: 1000  # per second per destination
+    icmp_flood:
+      threshold: 500   # per second
+  # Machine learning detection
+  ml:
+    enabled: true
+    model_path: /opt/ddos-defense/models/ensemble_model.joblib
+    feature_extractor_path: /opt/ddos-defense/models/feature_extractor.joblib
+    confidence_threshold: 0.85
+    inference_batch_size: 100
+    features:
+      - bytes_per_flow
+      - packets_per_flow
+      - duration
+      - src_port_entropy
+      - dst_port_entropy
+      - packet_size_mean
+      - packet_size_std
+      - inter_arrival_mean
+      - inter_arrival_std
+      - tcp_syn_count
+      - tcp_rst_count
+      - icmp_count
+      - udp_count
+      - flows_per_second
+      - unique_src_ips
+  # Ensemble configuration
+  ensemble:
+    voting: weighted  # weighted, majority, consensus
+    weights:
+      signature: 0.2
+      anomaly: 0.4
+      ml: 0.4
+    alert_threshold: 0.6  # minimum score to generate alert
+
+# Mitigation configuration
+mitigation:
+  auto_response: true
+  dry_run: false
+  action_timeout: 30
+  retry_count: 3
+  rollback_delay: 300  # seconds after attack subsides
+
+  # Rate limiting
+  rate_limiting:
+    default_mbps: 100
+    default_pps: 5000
+    per_ip:
+      enabled: true
+      limit_mbps: 10
+      limit_pps: 500
+      burst_mbps: 20
+      burst_pps: 1000
+    per_subnet:
+      enabled: true
+      prefix_length: 24
+      limit_mbps: 50
+      limit_pps: 2500
+
+  # BGP scrubbing
+  bgp:
+    enabled: false
+    asn: 65000
+    router_ip: 192.168.1.1
+    scrubber_next_hop: 10.0.0.1
+    community: "65000:666"
+    announcement_duration: 3600  # seconds
+
+  # SDN controller actions
+  sdn:
+    enabled: false
+    controller_type: none  # onos, opendaylight, ryu
+    controller_url: http://localhost:8181
+    controller_username: admin
+    controller_password: admin
+    flow_priority: 1000
+    idle_timeout: 60
+    hard_timeout: 3600
+
+  # Cloud provider integrations
+  cloud:
+    provider: none  # aws, azure, gcp, none
+    aws:
+      security_group_rules: true
+      waf_acl: true
+      shield_advanced: false
+    azure:
+      nsg_rules: true
+      ddos_protection: false
+    gcp:
+      firewall_rules: true
+      cloud_armor: false
+
+  # Scrubbing centers
+  scrubbing_centers:
+    - name: primary
+      ip_range: 203.0.113.0/24
+      capacity_mbps: 10000
+    - name: backup
+      ip_range: 198.51.100.0/24
+      capacity_mbps: 5000
+
+# API configuration
+api:
+  host: 0.0.0.0
+  port: 8000
+  workers: 4
+  reload: false
+  cors_origins:
+    - http://localhost:3000
+    - http://localhost:8080
+  jwt_secret: change_me_in_production
+  jwt_expiration_minutes: 1440
+
+# Database configuration
+database:
+  host: localhost
+  port: 5432
+  name: ddos_platform
+  user: ddos_user
+  password: change_me
+  ssl_mode: disable
+  pool_size: 10
+  max_overflow: 20
+
+# Redis configuration
+redis:
+  host: localhost
+  port: 6379
+  password: null
+  db: 0
+  ssl: false
+  pool_size: 10
+
+# Monitoring
+monitoring:
+  prometheus:
+    enabled: true
+    port: 9090
+    metrics_path: /metrics
+  opentelemetry:
+    enabled: false
+    endpoint: http://localhost:4317
+    service_name: ddos-defense-platform
+
+# Storage
+storage:
+  telemetry_retention_days: 7
+  alerts_retention_days: 90
+  backup_path: /var/backups/ddos-platform/
+
+# Security
+security:
+  tls:
+    enabled: false
+    cert_file: /etc/ssl/certs/ddos-platform.crt
+    key_file: /etc/ssl/private/ddos-platform.key
+  api_rate_limit:
+    enabled: true
+    requests_per_minute: 60
+  allowed_ips:
+    - 127.0.0.1
+    - ::1

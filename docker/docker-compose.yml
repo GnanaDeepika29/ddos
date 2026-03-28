@@ -1,0 +1,215 @@
+services:
+  # Kafka broker
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: ddos-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    networks:
+      - ddos-network
+    restart: unless-stopped
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: ddos-kafka
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,PLAINTEXT_HOST://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+    ports:
+      - "9092:9092"
+    networks:
+      - ddos-network
+    restart: unless-stopped
+
+  # PostgreSQL with TimescaleDB
+  postgres:
+    image: timescale/timescaledb:2.14.2-pg16
+    container_name: ddos-postgres
+    environment:
+      POSTGRES_DB: ddos_platform
+      POSTGRES_USER: ddos_user
+      POSTGRES_PASSWORD: change_me
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - ddos-network
+    restart: unless-stopped
+
+  # Redis for state/caching
+  redis:
+    image: redis:7.2-alpine
+    container_name: ddos-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - ddos-network
+    restart: unless-stopped
+
+  # Prometheus for metrics
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    container_name: ddos-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ../scripts/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - ddos-network
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.enable-lifecycle'
+
+  # Grafana for dashboards
+  grafana:
+    image: grafana/grafana:10.2.2
+    container_name: ddos-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+    volumes:
+      - ../scripts/monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ../scripts/monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+      - grafana_data:/var/lib/grafana
+    networks:
+      - ddos-network
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+
+  # Kafka UI for monitoring
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: ddos-kafka-ui
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+    networks:
+      - ddos-network
+    restart: unless-stopped
+    depends_on:
+      - kafka
+
+  # Ingestion service
+  ingestion:
+    build:
+      context: ..
+      dockerfile: docker/ingestion/Dockerfile
+    container_name: ddos-ingestion
+    environment:
+      - ENVIRONMENT=development
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - DB_HOST=postgres
+      - REDIS_HOST=redis
+    volumes:
+      - ../src:/app/src
+      - ../config:/app/config
+    networks:
+      - ddos-network
+    depends_on:
+      - kafka
+      - postgres
+      - redis
+    restart: unless-stopped
+
+  # Detection service
+  detection:
+    build:
+      context: ..
+      dockerfile: docker/detection/Dockerfile
+    container_name: ddos-detection
+    environment:
+      - ENVIRONMENT=development
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - DB_HOST=postgres
+      - REDIS_HOST=redis
+    volumes:
+      - ../src:/app/src
+      - ../config:/app/config
+    networks:
+      - ddos-network
+    depends_on:
+      - kafka
+      - postgres
+      - redis
+    restart: unless-stopped
+
+  # Mitigation service
+  mitigation:
+    build:
+      context: ..
+      dockerfile: docker/mitigation/Dockerfile
+    container_name: ddos-mitigation
+    environment:
+      - ENVIRONMENT=development
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - DB_HOST=postgres
+      - REDIS_HOST=redis
+    volumes:
+      - ../src:/app/src
+      - ../config:/app/config
+    networks:
+      - ddos-network
+    depends_on:
+      - kafka
+      - postgres
+      - redis
+    restart: unless-stopped
+    privileged: true  # needed for iptables operations in dev; remove in prod
+
+  # API service
+  api:
+    build:
+      context: ..
+      dockerfile: docker/api/Dockerfile
+    container_name: ddos-api
+    environment:
+      - ENVIRONMENT=development
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - DB_HOST=postgres
+      - REDIS_HOST=redis
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../src:/app/src
+      - ../config:/app/config
+    networks:
+      - ddos-network
+    depends_on:
+      - kafka
+      - postgres
+      - redis
+    restart: unless-stopped
+
+networks:
+  ddos-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  prometheus_data:
+  grafana_data:

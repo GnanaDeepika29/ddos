@@ -1,0 +1,81 @@
+# Development Configuration Override
+# This file overrides settings from default.yaml for development environment
+
+environment: development
+log_level: DEBUG
+debug: true
+
+# Telemetry ingestion
+ingestion:
+  interface: lo  # Use loopback for testing
+  promiscuous: false
+  flow_export:
+    enabled: false  # Disable flow export in dev
+
+# Kafka
+kafka:
+  bootstrap_servers:
+    - localhost:9092
+  topics:
+    telemetry_raw: ddos.telemetry.raw.dev
+    flows: ddos.telemetry.flows.dev
+    alerts: ddos.alerts.dev
+    mitigation_events: ddos.mitigation.events.dev
+
+# Detection thresholds - lower for easier testing
+detection:
+  anomaly:
+    volumetric:
+      threshold_mbps: 10  # Lower threshold for dev testing
+      threshold_pps: 10000
+    syn_flood:
+      threshold: 100  # Lower threshold
+    icmp_flood:
+      threshold: 50
+  ml:
+    enabled: false  # Disable ML in dev to save resources
+  ensemble:
+    weights:
+      signature: 0.3
+      anomaly: 0.7
+      ml: 0.0
+    alert_threshold: 0.5
+
+# Mitigation - dry run mode in dev
+mitigation:
+  auto_response: true
+  dry_run: true  # Don't actually apply changes
+  action_timeout: 5
+  rollback_delay: 60
+  bgp:
+    enabled: false
+  sdn:
+    enabled: false
+  cloud:
+    provider: none
+
+# API
+api:
+  reload: true  # Enable auto-reload during development
+  jwt_expiration_minutes: 60
+
+# Database
+database:
+  host: localhost
+  name: ddos_platform
+
+# Redis
+redis:
+  db: 1  # Use different DB for dev
+
+# Monitoring
+monitoring:
+  prometheus:
+    enabled: false  # Disable for dev
+  opentelemetry:
+    enabled: false
+
+# Security
+security:
+  api_rate_limit:
+    enabled: false  # Disable rate limiting for dev
