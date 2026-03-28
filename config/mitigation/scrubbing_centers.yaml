@@ -1,0 +1,120 @@
+# Scrubbing Centers Configuration
+# Defines traffic scrubbing centers for BGP route redirection
+
+scrubbing_centers:
+  # Primary scrubbing center
+  - name: us-east-1
+    description: "AWS US East (N. Virginia) scrubbing facility"
+    ip_range: 203.0.113.0/24
+    capacity_mbps: 100000
+    capacity_pps: 50000000
+    bgp_next_hop: 203.0.113.1
+    asn: 65001
+    priority: 1
+    health_check:
+      enabled: true
+      interval_seconds: 30
+      timeout_seconds: 5
+      retries: 3
+    endpoints:
+      - 203.0.113.10
+      - 203.0.113.11
+    regions:
+      - us-east-1
+      - us-east-2
+
+  - name: us-west-2
+    description: "AWS US West (Oregon) scrubbing facility"
+    ip_range: 198.51.100.0/24
+    capacity_mbps: 100000
+    capacity_pps: 50000000
+    bgp_next_hop: 198.51.100.1
+    asn: 65002
+    priority: 1
+    health_check:
+      enabled: true
+      interval_seconds: 30
+      timeout_seconds: 5
+      retries: 3
+    endpoints:
+      - 198.51.100.10
+      - 198.51.100.11
+    regions:
+      - us-west-1
+      - us-west-2
+
+  - name: eu-west-1
+    description: "AWS EU West (Ireland) scrubbing facility"
+    ip_range: 192.0.2.0/24
+    capacity_mbps: 80000
+    capacity_pps: 40000000
+    bgp_next_hop: 192.0.2.1
+    asn: 65003
+    priority: 2
+    health_check:
+      enabled: true
+      interval_seconds: 30
+      timeout_seconds: 5
+      retries: 3
+    endpoints:
+      - 192.0.2.10
+      - 192.0.2.11
+    regions:
+      - eu-west-1
+      - eu-central-1
+
+  - name: ap-southeast-1
+    description: "AWS Asia Pacific (Singapore) scrubbing facility"
+    ip_range: 203.0.113.64/26
+    capacity_mbps: 50000
+    capacity_pps: 25000000
+    bgp_next_hop: 203.0.113.65
+    asn: 65004
+    priority: 2
+    health_check:
+      enabled: true
+      interval_seconds: 30
+      timeout_seconds: 5
+      retries: 3
+    endpoints:
+      - 203.0.113.70
+      - 203.0.113.71
+    regions:
+      - ap-southeast-1
+      - ap-northeast-1
+
+# Default scrubbing settings
+defaults:
+  # Announcement duration (seconds)
+  announcement_duration: 3600
+  # BGP community to attach to announcements
+  community: "65000:666"
+  # Local preference (higher = more preferred)
+  local_preference: 100
+  # MED (Multi-Exit Discriminator) value
+  med: 0
+
+# Routing policies
+routing_policies:
+  # Preferred scrubbing center per region (overrides priority)
+  preferred:
+    us-east-1: us-east-1
+    us-east-2: us-east-1
+    us-west-1: us-west-2
+    us-west-2: us-west-2
+    eu-west-1: eu-west-1
+    eu-central-1: eu-west-1
+    ap-southeast-1: ap-southeast-1
+    ap-northeast-1: ap-southeast-1
+
+  # Fallback if primary fails
+  fallback:
+    us-east-1: us-west-2
+    us-west-2: us-east-1
+    eu-west-1: us-east-1
+    ap-southeast-1: us-west-2
+
+  # Load balancing across scrubbing centers
+  load_balancing:
+    enabled: true
+    algorithm: "round_robin"  # round_robin, least_loaded, hash

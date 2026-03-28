@@ -1,0 +1,198 @@
+# Production Configuration Override
+# This file overrides settings from default.yaml for production environment
+
+environment: production
+log_level: INFO
+debug: false
+
+# Telemetry ingestion
+ingestion:
+  interface: eth0
+  promiscuous: true
+  snaplen: 1518
+  buffer_size: 16777216  # 16MB
+  flow_export:
+    enabled: true
+    collector_port: 2055
+    template_port: 2056
+  telemetry_stream:
+    enabled: true
+    grpc_port: 50051
+
+# Kafka - production settings with replication
+kafka:
+  bootstrap_servers:
+    - kafka-1.prod.internal:9092
+    - kafka-2.prod.internal:9092
+    - kafka-3.prod.internal:9092
+  topics:
+    telemetry_raw: ddos.telemetry.raw.prod
+    flows: ddos.telemetry.flows.prod
+    alerts: ddos.alerts.prod
+    mitigation_events: ddos.mitigation.events.prod
+    control: ddos.control.prod
+  consumer_group: ddos-defense-platform-prod
+  producer_batch_size: 65536
+  producer_linger_ms: 10
+  security_protocol: SSL
+  ssl_cafile: /etc/kafka/secrets/ca.pem
+  ssl_certfile: /etc/kafka/secrets/client.pem
+  ssl_keyfile: /etc/kafka/secrets/client.key
+
+# Detection - tuned for production
+detection:
+  signature:
+    enabled: true
+    rules_path: /etc/snort/rules/
+    reload_interval: 3600
+  anomaly:
+    windows:
+      short: 30
+      medium: 300
+      long: 3600
+    volumetric:
+      threshold_mbps: 1000
+      threshold_pps: 500000
+    entropy:
+      threshold: 3.0
+    syn_flood:
+      threshold: 5000
+    icmp_flood:
+      threshold: 2000
+  ml:
+    enabled: true
+    model_path: /opt/ddos-defense/models/ensemble_model_prod.joblib
+    feature_extractor_path: /opt/ddos-defense/models/feature_extractor_prod.joblib
+    confidence_threshold: 0.90
+    inference_batch_size: 500
+  ensemble:
+    voting: weighted
+    weights:
+      signature: 0.2
+      anomaly: 0.4
+      ml: 0.4
+    alert_threshold: 0.7
+
+# Mitigation - active response with high-availability
+mitigation:
+  auto_response: true
+  dry_run: false
+  action_timeout: 30
+  retry_count: 5
+  rollback_delay: 600
+  rate_limiting:
+    default_mbps: 200
+    default_pps: 10000
+    per_ip:
+      enabled: true
+      limit_mbps: 20
+      limit_pps: 1000
+    per_subnet:
+      enabled: true
+      prefix_length: 24
+      limit_mbps: 100
+      limit_pps: 5000
+  bgp:
+    enabled: true
+    asn: 65000
+    router_ip: 10.0.0.1
+    scrubber_next_hop: 203.0.113.1
+    community: "65000:666"
+    announcement_duration: 7200
+  sdn:
+    enabled: true
+    controller_type: onos
+    controller_url: https://onos-cluster.prod.internal:8443
+    controller_username: admin
+    controller_password: ${SDN_CONTROLLER_PASSWORD}
+    flow_priority: 5000
+    idle_timeout: 120
+    hard_timeout: 3600
+  cloud:
+    provider: aws
+    aws:
+      security_group_rules: true
+      waf_acl: true
+      shield_advanced: true
+    azure:
+      nsg_rules: false
+      ddos_protection: false
+    gcp:
+      firewall_rules: false
+      cloud_armor: false
+  scrubbing_centers:
+    - name: us-east-1
+      ip_range: 203.0.113.0/24
+      capacity_mbps: 100000
+    - name: us-west-2
+      ip_range: 198.51.100.0/24
+      capacity_mbps: 100000
+    - name: eu-west-1
+      ip_range: 192.0.2.0/24
+      capacity_mbps: 80000
+
+# API - production with TLS
+api:
+  host: 0.0.0.0
+  port: 8443
+  workers: 8
+  reload: false
+  cors_origins:
+    - https://dashboard.ddos-defense.internal
+    - https://admin.ddos-defense.internal
+  jwt_secret: ${JWT_SECRET}
+  jwt_expiration_minutes: 1440
+
+# Database - production with connection pooling
+database:
+  host: db-primary.prod.internal
+  port: 5432
+  name: ddos_platform_prod
+  user: ddos_prod_user
+  password: ${DB_PASSWORD}
+  ssl_mode: require
+  pool_size: 20
+  max_overflow: 40
+
+# Redis - production with sentinel
+redis:
+  host: redis-sentinel.prod.internal
+  port: 26379
+  password: ${REDIS_PASSWORD}
+  db: 0
+  ssl: true
+  sentinel_master: mymaster
+  pool_size: 20
+
+# Monitoring
+monitoring:
+  prometheus:
+    enabled: true
+    port: 9090
+    metrics_path: /metrics
+  opentelemetry:
+    enabled: true
+    endpoint: http://otel-collector.prod.internal:4317
+    service_name: ddos-defense-platform
+
+# Storage - production with long retention
+storage:
+  telemetry_retention_days: 14
+  alerts_retention_days: 365
+  backup_path: /data/backups/ddos-platform/
+  backup_schedule: "0 2 * * *"  # daily at 2am
+
+# Security
+security:
+  tls:
+    enabled: true
+    cert_file: /etc/ssl/certs/ddos-platform.crt
+    key_file: /etc/ssl/private/ddos-platform.key
+    ca_file: /etc/ssl/certs/ca.crt
+  api_rate_limit:
+    enabled: true
+    requests_per_minute: 120
+  allowed_ips:
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+    - 192.168.0.0/16

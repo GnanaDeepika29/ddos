@@ -1,0 +1,93 @@
+# Volumetric Attack Detection Configuration
+# Thresholds and parameters for volume-based DDoS detection
+
+# Bits per second thresholds (megabits per second)
+mbps:
+  # Alert thresholds - generate warning when exceeded
+  warning: 500
+  # Critical threshold - trigger mitigation action
+  critical: 1000
+  # Per interface thresholds
+  per_interface:
+    eth0:
+      warning: 800
+      critical: 1500
+    eth1:
+      warning: 400
+      critical: 800
+
+# Packets per second thresholds
+pps:
+  warning: 250000
+  critical: 500000
+  per_ip:
+    warning: 1000
+    critical: 5000
+  per_subnet:
+    prefix_length: 24
+    warning: 5000
+    critical: 20000
+
+# Flows per second thresholds
+flows_per_second:
+  warning: 10000
+  critical: 50000
+
+# Protocol-specific thresholds
+protocols:
+  tcp:
+    syn:
+      warning: 5000
+      critical: 25000
+    fin:
+      warning: 2000
+      critical: 10000
+    rst:
+      warning: 2000
+      critical: 10000
+    ack:
+      warning: 20000
+      critical: 100000
+  udp:
+    warning: 5000
+    critical: 25000
+  icmp:
+    warning: 1000
+    critical: 5000
+  other:
+    warning: 500
+    critical: 2500
+
+# Amplification attack thresholds
+amplification:
+  dns:
+    factor_threshold: 10  # response size / request size > 10
+    query_rate_critical: 5000  # queries per second
+  ntp:
+    factor_threshold: 20
+    query_rate_critical: 2000
+  ssdp:
+    factor_threshold: 30
+    query_rate_critical: 1000
+  memcached:
+    factor_threshold: 100
+    query_rate_critical: 500
+
+# Time windows for averaging (seconds)
+windows:
+  short: 5
+  medium: 30
+  long: 300
+
+# Threshold adaptation
+adaptive:
+  enabled: true
+  learning_period_hours: 24
+  baseline_percentile: 95
+  deviation_factor: 2.0
+  update_interval_minutes: 60
+  min_threshold_mbps: 10
+  max_threshold_mbps: 10000
+
+# Alert cooldown (seconds)
+alert_cooldown: 60

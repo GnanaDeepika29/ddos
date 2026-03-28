@@ -1,0 +1,218 @@
+# Machine Learning Models Configuration
+# Parameters for ML-based DDoS detection
+
+# General ML settings
+general:
+  # Enable/disable ML detection
+  enabled: true
+  # Inference mode: sync, async, batch
+  inference_mode: batch
+  # Batch size for inference
+  batch_size: 100
+  # Maximum queue size for pending samples
+  max_queue_size: 10000
+  # Confidence threshold for generating alerts (0.0 to 1.0)
+  confidence_threshold: 0.85
+  # Minimum number of samples before making predictions
+  min_samples_for_prediction: 10
+  # Update interval for online learning (seconds)
+  online_update_interval: 3600
+
+# Model paths
+models:
+  # Ensemble model (primary)
+  ensemble:
+    path: /opt/ddos-defense/models/ensemble_model.joblib
+    version: 1.0.0
+    fallback_path: /opt/ddos-defense/models/ensemble_model_fallback.joblib
+  # Individual component models
+  random_forest:
+    path: /opt/ddos-defense/models/rf_model.joblib
+    enabled: true
+    weight: 0.4
+  xgboost:
+    path: /opt/ddos-defense/models/xgb_model.joblib
+    enabled: true
+    weight: 0.4
+  neural_network:
+    path: /opt/ddos-defense/models/nn_model.h5
+    enabled: false
+    weight: 0.2
+  lstm:
+    path: /opt/ddos-defense/models/lstm_model.h5
+    enabled: false
+    weight: 0.2
+
+# Feature extractor
+feature_extractor:
+  path: /opt/ddos-defense/models/feature_extractor.joblib
+  # Feature list (must match training)
+  features:
+    - bytes_per_flow
+    - packets_per_flow
+    - duration_seconds
+    - src_port_entropy
+    - dst_port_entropy
+    - packet_size_mean
+    - packet_size_std
+    - inter_arrival_mean
+    - inter_arrival_std
+    - tcp_syn_count
+    - tcp_rst_count
+    - tcp_ack_count
+    - udp_count
+    - icmp_count
+    - flows_per_second
+    - unique_src_ips
+    - unique_dst_ips
+    - protocol_diversity
+    - src_ip_entropy
+    - dst_ip_entropy
+  # Normalization parameters (mean, std, min, max)
+  scaler_type: standard  # standard, minmax, robust
+  # Categorical features (if any)
+  categorical_features: []
+
+# Model training configuration
+training:
+  # Training data path
+  data_path: /data/training/ddos_dataset.parquet
+  # Validation split ratio
+  validation_split: 0.2
+  # Test split ratio
+  test_split: 0.1
+  # Random seed for reproducibility
+  random_seed: 42
+  # Class weights (for imbalanced datasets)
+  class_weights:
+    benign: 1.0
+    attack: 5.0
+  # Hyperparameters for models
+  hyperparameters:
+    random_forest:
+      n_estimators: 200
+      max_depth: 20
+      min_samples_split: 5
+      min_samples_leaf: 2
+      max_features: sqrt
+    xgboost:
+      n_estimators: 200
+      max_depth: 10
+      learning_rate: 0.1
+      subsample: 0.8
+      colsample_bytree: 0.8
+    neural_network:
+      hidden_layers: [128, 64, 32]
+      activation: relu
+      dropout_rate: 0.3
+      optimizer: adam
+      learning_rate: 0.001
+    lstm:
+      units: [64, 32]
+      dropout: 0.2
+      recurrent_dropout: 0.2
+      sequence_length: 10
+
+# Model evaluation
+evaluation:
+  # Metrics to track
+  metrics:
+    - accuracy
+    - precision
+    - recall
+    - f1_score
+    - auc_roc
+    - false_positive_rate
+    - false_negative_rate
+  # Minimum acceptable F1 score
+  min_f1_score: 0.95
+  # Minimum acceptable precision
+  min_precision: 0.90
+  # Minimum acceptable recall
+  min_recall: 0.95
+  # Confusion matrix labels
+  class_labels:
+    - benign
+    - volumetric
+    - protocol
+    - application
+    - amplification
+
+# Online learning / model adaptation
+online_learning:
+  enabled: true
+  # Algorithm: incremental, mini_batch, active
+  algorithm: mini_batch
+  # Batch size for online updates
+  batch_size: 1000
+  # Update frequency (samples)
+  update_frequency: 10000
+  # Learning rate for incremental updates
+  learning_rate: 0.01
+  # Maximum number of samples to keep for retraining
+  max_history_samples: 100000
+  # Label feedback integration
+  feedback_enabled: true
+  feedback_topic: ddos.feedback.labels
+
+# Drift detection
+drift_detection:
+  enabled: true
+  # Statistical tests for concept drift
+  method: p_values  # p_values, adwin, kld
+  # Significance level for drift detection
+  significance_level: 0.05
+  # Minimum window size for drift detection
+  min_window_size: 1000
+  # Alert on drift
+  alert_on_drift: true
+
+# Feature importance
+feature_importance:
+  enabled: true
+  # Output format
+  output_path: /var/log/ddos-platform/feature_importance.json
+  # Update frequency (hours)
+  update_frequency: 24
+  # Top N features to report
+  top_n: 10
+
+# Explainability (XAI)
+explainability:
+  enabled: true
+  # Methods: shap, lime, integrated_gradients
+  method: shap
+  # Number of samples for explanation
+  sample_size: 100
+  # Background dataset for SHAP
+  background_data_path: /data/training/shap_background.parquet
+  # Output explanations to Kafka
+  output_topic: ddos.explanations
+
+# Model registry
+registry:
+  enabled: true
+  # Storage backend: local, s3, gcs, azure
+  backend: local
+  # Path for storing model artifacts
+  artifacts_path: /opt/ddos-defense/models/registry/
+  # Maximum versions to keep per model
+  max_versions: 5
+  # Model versioning
+  versioning: semver  # semver, timestamp
+  # S3 configuration (if backend is s3)
+  s3:
+    bucket: ddos-model-registry
+    region: us-east-1
+    prefix: models/
+
+# Performance monitoring
+performance:
+  # Track inference latency
+  track_latency: true
+  # Latency threshold (milliseconds) for alerts
+  latency_threshold_ms: 100
+  # Track throughput
+  track_throughput: true
+  # Export metrics to Prometheus
+  prometheus_metrics: true

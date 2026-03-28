@@ -1,0 +1,68 @@
+# Prometheus configuration for DDoS Defense Platform
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: 'ddos-defense'
+
+# Alertmanager configuration (if used)
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []
+          # - alertmanager:9093
+
+# Rule files for alerting
+rule_files:
+  - "alerts/*.yml"
+
+# Scrape configurations
+scrape_configs:
+  # Prometheus self-metrics
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # API service metrics
+  - job_name: 'ddos-api'
+    static_configs:
+      - targets: ['api:8000']
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+
+  # Detection service metrics
+  - job_name: 'ddos-detection'
+    static_configs:
+      - targets: ['detection:9090']
+    scrape_interval: 10s
+
+  # Ingestion service metrics
+  - job_name: 'ddos-ingestion'
+    static_configs:
+      - targets: ['ingestion:9090']
+    scrape_interval: 10s
+
+  # Mitigation service metrics
+  - job_name: 'ddos-mitigation'
+    static_configs:
+      - targets: ['mitigation:9090']
+    scrape_interval: 10s
+
+  # Kafka metrics (if JMX exporter is set up)
+  - job_name: 'kafka'
+    static_configs:
+      - targets: ['kafka:9092']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  # PostgreSQL metrics (requires postgres_exporter)
+  - job_name: 'postgresql'
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+    scrape_interval: 30s
+
+  # Redis metrics (requires redis_exporter)
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+    scrape_interval: 30s

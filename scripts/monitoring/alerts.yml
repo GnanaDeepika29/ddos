@@ -1,0 +1,104 @@
+# Prometheus alerting rules for DDoS Defense Platform
+groups:
+  - name: ddos_detection_alerts
+    interval: 30s
+    rules:
+      # High alert rate
+      - alert: HighAlertRate
+        expr: rate(ddos_defense_alerts_total[5m]) > 10
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High rate of DDoS alerts"
+          description: "More than 10 alerts per second over the last 5 minutes."
+
+      # Critical alert rate
+      - alert: CriticalAlertRate
+        expr: rate(ddos_defense_alerts_total[5m]) > 50
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Critical rate of DDoS alerts"
+          description: "More than 50 alerts per second over the last 30 seconds."
+
+      # Detection service down
+      - alert: DetectionServiceDown
+        expr: ddos_defense_service_up{service="detection"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Detection service is down"
+          description: "The detection service has been unreachable for more than 1 minute."
+
+      # Mitigation service down
+      - alert: MitigationServiceDown
+        expr: ddos_defense_service_up{service="mitigation"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Mitigation service is down"
+          description: "The mitigation service has been unreachable for more than 1 minute."
+
+      # Ingestion service down
+      - alert: IngestionServiceDown
+        expr: ddos_defense_service_up{service="ingestion"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Ingestion service is down"
+          description: "The ingestion service has been unreachable for more than 1 minute."
+
+      # High detection latency
+      - alert: HighDetectionLatency
+        expr: histogram_quantile(0.95, sum(rate(ddos_defense_detection_latency_seconds_bucket[5m])) by (le)) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High detection latency"
+          description: "95th percentile detection latency is above 0.5 seconds."
+
+      # Mitigation action failures
+      - alert: MitigationActionFailures
+        expr: rate(ddos_defense_mitigation_errors_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Mitigation action failures"
+          description: "More than 0.1 errors per second in mitigation actions."
+
+      # Kafka consumer lag high
+      - alert: HighKafkaConsumerLag
+        expr: kafka_consumer_lag{group="ddos-defense-platform"} > 10000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High Kafka consumer lag"
+          description: "Consumer lag for group 'ddos-defense-platform' exceeds 10000 messages."
+
+      # Database connection pool saturation
+      - alert: DatabaseConnectionPoolHighUsage
+        expr: (ddos_defense_db_connections_used / ddos_defense_db_connections_max) > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Database connection pool high usage"
+          description: "Database connection pool usage is above 80%."
+
+      # High packet drop rate in ingestion
+      - alert: HighPacketDropRate
+        expr: rate(ddos_defense_packets_dropped_total[5m]) > 1000
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High packet drop rate"
+          description: "Packet drop rate is above 1000 packets per second."

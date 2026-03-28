@@ -1,0 +1,127 @@
+# Rate Limiting Configuration
+# Defines rate limiting policies for DDoS mitigation
+
+# Global rate limits (applied when no specific policy matches)
+global:
+  enabled: true
+  mbps: 100
+  pps: 5000
+  per_ip:
+    enabled: true
+    mbps: 10
+    pps: 500
+  per_subnet:
+    enabled: true
+    prefix_length: 24
+    mbps: 50
+    pps: 2500
+
+# Protocol-specific rate limits
+protocols:
+  tcp:
+    enabled: true
+    mbps: 200
+    pps: 10000
+    per_ip:
+      mbps: 20
+      pps: 1000
+    per_subnet:
+      mbps: 100
+      pps: 5000
+  udp:
+    enabled: true
+    mbps: 100
+    pps: 5000
+    per_ip:
+      mbps: 10
+      pps: 500
+    per_subnet:
+      mbps: 50
+      pps: 2500
+  icmp:
+    enabled: true
+    mbps: 10
+    pps: 500
+    per_ip:
+      mbps: 1
+      pps: 50
+    per_subnet:
+      mbps: 5
+      pps: 250
+
+# Application-layer rate limits (HTTP, DNS, etc.)
+application:
+  http:
+    enabled: true
+    requests_per_second: 1000
+    per_ip:
+      requests_per_second: 100
+    per_uri:
+      enabled: true
+      threshold: 500
+  https:
+    enabled: true
+    requests_per_second: 1000
+    per_ip:
+      requests_per_second: 100
+  dns:
+    enabled: true
+    queries_per_second: 5000
+    per_ip:
+      queries_per_second: 500
+
+# Advanced rate limiting strategies
+advanced:
+  # Token bucket parameters
+  token_bucket:
+    bucket_size: 1000
+    refill_rate: 100  # tokens per second
+  # Leaky bucket
+  leaky_bucket:
+    bucket_size: 1000
+    leak_rate: 100   # packets per second
+  # Adaptive rate limiting
+  adaptive:
+    enabled: true
+    learning_period: 300  # seconds
+    baseline_percentile: 95
+    adjustment_factor: 1.2
+    min_threshold_mbps: 10
+    max_threshold_mbps: 1000
+
+# Specific policies for critical infrastructure
+critical_infrastructure:
+  - name: "dns_servers"
+    targets:
+      - 10.0.0.0/24
+    policies:
+      - type: "per_ip"
+        mbps: 5
+        pps: 250
+  - name: "web_servers"
+    targets:
+      - 192.168.1.0/24
+    policies:
+      - type: "per_ip"
+        mbps: 20
+        pps: 1000
+      - type: "application"
+        requests_per_second: 500
+
+# Exemptions (IPs or subnets that bypass rate limits)
+exemptions:
+  - name: "management_network"
+    targets:
+      - 10.255.0.0/16
+    reason: "Management traffic should not be throttled"
+  - name: "monitoring_services"
+    targets:
+      - 192.168.100.0/24
+    reason: "Monitoring probes must not be blocked"
+
+# Rate limit violation handling
+violation_handling:
+  action: "block"  # block, rate_limit, log_only
+  duration: 300    # seconds to enforce block
+  threshold: 3     # number of violations before action
+  notify: true
